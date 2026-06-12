@@ -2,7 +2,7 @@
   <img src="assets/logo-wordmark.svg" alt="interstellar" width="520">
 </p>
 
-# interstellar
+---
 
 A controlled gateway between AI agents and your infrastructure.
 
