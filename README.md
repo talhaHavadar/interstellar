@@ -28,10 +28,16 @@ Early development, but the core is end-to-end. Working today: the MCP gateway
 capability-based policy, the audit log, and **composition** — the session
 manager resolves the links a tool needs, chaining wormholes through
 admin-defined targets (including routing one wormhole's connection through
-another via `via`). First-party wormholes: `local-exec` and `ssh` (provide
-command execution), `sysinfo` (a purpose-built consumer), and `echo`. Not yet
-shipped: a VPN wormhole providing `network-context`, and snap packaging with
-wormholes as snap components.
+another via `via`). First-party wormholes:
+
+- **exec-endpoint providers:** `local-exec` (gateway host), `ssh` (remote, with
+  key / password / agent auth, optionally tunnelled)
+- **network-context providers:** `vpn-wireguard` (userspace WireGuard),
+  `tailscale` (userspace tsnet) — both no-root, no-container
+- **consumers:** `sysinfo`, `uname`
+- `echo` (self-contained, for trying the gateway out)
+
+Not yet shipped: snap packaging with wormholes as snap components.
 
 ## Quick start
 
