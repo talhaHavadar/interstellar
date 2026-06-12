@@ -22,7 +22,12 @@ import (
 )
 
 const (
-	openTimeout        = 30 * time.Second
+	// defaultOpenTimeout is a generous backstop for bringing a link up. It is
+	// deliberately longer than any wormhole's own connect timeout (e.g.
+	// tsnet's ~60s tailnet join) so the wormhole's real error surfaces rather
+	// than being masked by this timeout. Tunnels are slow; a fast provider
+	// (local-exec) comes up in milliseconds regardless.
+	defaultOpenTimeout = 90 * time.Second
 	defaultIdleTimeout = 60 * time.Second
 	closeTimeout       = 10 * time.Second
 )
@@ -36,6 +41,8 @@ type Target struct {
 	Config      json.RawMessage
 	Via         map[string]string // required port name -> upstream target name
 	IdleTimeout time.Duration
+	// OpenTimeout overrides defaultOpenTimeout for bringing this link up.
+	OpenTimeout time.Duration
 }
 
 // Registry is the slice of the wormhole registry the session manager needs:
@@ -235,6 +242,10 @@ func (m *Manager) open(ctx context.Context, target Target) (*wormholev1.Link, co
 	ready := make(chan openResult, 1)
 	go m.runLink(target.Name, stream, ready)
 
+	openTimeout := target.OpenTimeout
+	if openTimeout <= 0 {
+		openTimeout = defaultOpenTimeout
+	}
 	select {
 	case res := <-ready:
 		if res.err != nil {
@@ -247,7 +258,7 @@ func (m *Manager) open(ctx context.Context, target Target) (*wormholev1.Link, co
 	case <-time.After(openTimeout):
 		cancel()
 		release()
-		return nil, nil, nil, fmt.Errorf("target %q: timed out waiting for link to come up", target.Name)
+		return nil, nil, nil, fmt.Errorf("target %q: timed out after %s waiting for link to come up", target.Name, openTimeout)
 	case <-ctx.Done():
 		cancel()
 		release()

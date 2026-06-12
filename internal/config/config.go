@@ -47,6 +47,28 @@ type Target struct {
 	// IdleTimeout is how long the link is kept warm after its last release,
 	// for reuse across calls. Zero uses the server default.
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	// OpenTimeout bounds how long bringing this link up may take. Zero uses
+	// the server default (generous, to allow for slow tunnels).
+	OpenTimeout time.Duration `yaml:"open_timeout"`
+}
+
+// reservedConfigKeys are target-level field names that must not appear inside
+// a target's `config:` block. Catching them turns a silent misindentation
+// (e.g. `via` nested under `config`) into a clear startup error.
+var reservedConfigKeys = []string{"via", "wormhole", "port", "idle_timeout", "open_timeout"}
+
+// Validate checks the configuration for structural mistakes that YAML itself
+// won't catch — chiefly target-level keys accidentally nested under config.
+func (c *Config) Validate() error {
+	for name, t := range c.Targets {
+		for _, key := range reservedConfigKeys {
+			if _, ok := t.Config[key]; ok {
+				return fmt.Errorf("target %q: %q is a target-level field but is nested under config "+
+					"(check your indentation — it should be at the same level as wormhole/port/config)", name, key)
+			}
+		}
+	}
+	return nil
 }
 
 // Default returns the configuration used when no file is given.
@@ -74,6 +96,9 @@ func Load(path string) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	return cfg, nil
 }

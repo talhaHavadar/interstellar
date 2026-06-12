@@ -153,6 +153,7 @@ func buildTargets(cfg *config.Config) (map[string]session.Target, error) {
 			Config:      configJSON,
 			Via:         t.Via,
 			IdleTimeout: t.IdleTimeout,
+			OpenTimeout: t.OpenTimeout,
 		}
 	}
 	return targets, nil
