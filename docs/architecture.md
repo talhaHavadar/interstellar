@@ -46,15 +46,17 @@ them:
 
 | Port type         | Descriptor                  | Providers                  |
 |-------------------|-----------------------------|----------------------------|
-| `network-context` | SOCKS5 dialer socket path   | `vpn-wireguard`, `tailscale` |
+| `network-context` | SOCKS5 dialer socket path   | `wireguard`, `tailscale`   |
 | `exec-endpoint`   | gRPC exec service address   | `local-exec`, `ssh`        |
 
 A `network-context` provider is just a userspace dialer behind a SOCKS5
 server on a unix socket (the SDK's `ServeNetworkContext` does the SOCKS5
-part). `vpn-wireguard` brings up a WireGuard tunnel with wireguard-go's
-netstack; `tailscale` embeds a node with `tsnet` — no root, no kernel
-interface, no container. A consumer like `ssh` dials through the socket with
-plain SOCKS5 and never knows which kind of tunnel is behind it.
+part). `wireguard` brings up a WireGuard tunnel with wireguard-go's netstack;
+`tailscale` embeds a node with `tsnet` — no root, no kernel interface, no
+container. Both live in the separate
+[wormholes](https://github.com/talhaHavadar/wormholes) repo (heavy deps). A
+consumer like `ssh` dials through the socket with plain SOCKS5 and never knows
+which kind of tunnel is behind it.
 
 The shipping picture: `sysinfo` requires an `exec-endpoint`; `ssh` and
 `local-exec` provide one; `ssh` optionally requires a `network-context` for

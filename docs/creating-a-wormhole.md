@@ -175,12 +175,13 @@ w.Provide(
 ```
 
 Worked examples: [`wormholes/local-exec`](../wormholes/local-exec/main.go)
-(minimal exec provider), [`wormholes/ssh`](../wormholes/ssh/main.go) (exec
+(minimal exec provider) and [`wormholes/ssh`](../wormholes/ssh/main.go) (exec
 provider that *also* consumes an optional `network-context`, so it can be
-tunnelled without knowing how), and [`wormholes/vpn-wireguard`](../wormholes/vpn-wireguard/main.go)
-/ [`wormholes/tailscale`](../wormholes/tailscale/main.go) (network-context
-providers — note both are ~40 lines plus their tunnel-specific code).
-Descriptor types live in [`pkg/wormhole/port.go`](../pkg/wormhole/port.go).
+tunnelled without knowing how). The network-context providers `wireguard` and
+`tailscale` live in the separate
+[wormholes](https://github.com/talhaHavadar/wormholes) repo (heavy deps) and
+are each ~40 lines plus their tunnel-specific code. Descriptor types live in
+[`pkg/wormhole/port.go`](../pkg/wormhole/port.go).
 
 Targets — which configuration a port binds to — are defined by the server
 admin in config, not by wormholes or agents. See
