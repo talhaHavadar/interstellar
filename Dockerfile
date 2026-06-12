@@ -6,7 +6,7 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/interstellard ./cmd/interstellard
-RUN for w in echo local-exec ssh sysinfo; do \
+RUN for w in echo local-exec ssh sysinfo uname; do \
       CGO_ENABLED=0 go build -o /out/wormholes/$w ./wormholes/$w; \
     done
 

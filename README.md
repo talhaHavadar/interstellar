@@ -14,7 +14,7 @@ AI agent ──MCP (JSON-RPC)──▶ interstellard ──gRPC──▶ wormhol
                               │ policy │ audit │      (separate processes)
 ```
 
-**Design stance:** wormholes expose *specific, typed operations*
+**Design stance:** wormholes expose _specific, typed operations_
 (`deb-builder__build_source_package(distro, arch)`), not generic command
 runners. Raw execution travels between wormholes over typed ports that agents
 never see, and tools that accept caller-supplied commands are denied by
