@@ -25,7 +25,7 @@ targets:
     via:
       net: tailnet
     config:
-      host: 100.93.222.5
+      host: gfx1201
       user: talha
       # Password is read from $INTERSTELLAR_REMOTE_PASSWORD, not stored here.
       password_env: INTERSTELLAR_REMOTE_PASSWORD
