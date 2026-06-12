@@ -8,12 +8,15 @@ import (
 	"encoding/pem"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/talhaHavadar/interstellar/pkg/wormhole"
 )
@@ -131,6 +134,62 @@ func TestConnectAndRun(t *testing.T) {
 	if sink2.exit() != 7 {
 		t.Errorf("exit = %d, want 7", sink2.exit())
 	}
+}
+
+// proxyAddrConn simulates the SOCKS5 case: a working TCP connection whose
+// RemoteAddr is a unix socket path rather than host:port.
+type proxyAddrConn struct {
+	net.Conn
+}
+
+func (proxyAddrConn) RemoteAddr() net.Addr {
+	return tcpLikeAddr("/tmp/interstellar-links/abc/socks5.sock")
+}
+
+// TestConnectKnownHostsThroughProxy reproduces the bug where SSH routed
+// through a SOCKS5 unix socket fails host-key verification because knownhosts
+// receives the socket path instead of the target host:port.
+func TestConnectKnownHostsThroughProxy(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("needs a POSIX shell")
+	}
+
+	hostSigner, _ := genKey(t)
+	clientSigner, clientPEM := genKey(t)
+	addr, stop := startSSHServer(t, hostSigner, clientSigner.PublicKey())
+	defer stop()
+
+	// A known_hosts file authorizing the server's key for the dialed address.
+	khPath := filepath.Join(t.TempDir(), "known_hosts")
+	line := knownhosts.Line([]string{knownhosts.Normalize(addr)}, hostSigner.PublicKey())
+	if err := os.WriteFile(khPath, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host, port, _ := net.SplitHostPort(addr)
+	cfg := &sshConfig{
+		Host:           host,
+		Port:           atoi(port),
+		User:           "tester",
+		KeyData:        string(clientPEM),
+		KnownHostsFile: khPath,
+	}
+
+	// Dial as the SOCKS5 path would: a real connection reporting a unix-socket
+	// RemoteAddr. Without the targetAddrConn fix, knownhosts would fail here.
+	proxyDial := func(ctx context.Context, address string) (net.Conn, error) {
+		c, err := directDialer(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+		return proxyAddrConn{c}, nil
+	}
+
+	client, err := connect(context.Background(), cfg, proxyDial)
+	if err != nil {
+		t.Fatalf("connect through proxy with known_hosts: %v", err)
+	}
+	client.Close()
 }
 
 // --- test helpers: a minimal in-process SSH server ---

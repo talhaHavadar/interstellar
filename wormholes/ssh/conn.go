@@ -125,6 +125,11 @@ func connect(ctx context.Context, cfg *sshConfig, dial dialer) (*ssh.Client, err
 	if err != nil {
 		return nil, fmt.Errorf("dialing %s: %w", addr, err)
 	}
+	// When dialing through a network-context (SOCKS5 over a unix socket), the
+	// connection's RemoteAddr is the proxy socket path, which the knownhosts
+	// host-key callback would choke on (it expects host:port). Report the real
+	// target address so verification sees the host we actually reached.
+	conn = &targetAddrConn{Conn: conn, target: tcpLikeAddr(addr)}
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
 	if err != nil {
 		conn.Close()
@@ -329,3 +334,20 @@ func quoteCommand(argv []string, dir string) string {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// targetAddrConn overrides RemoteAddr so host-key verification sees the real
+// target host:port rather than the address of whatever transport carried the
+// connection (e.g. a SOCKS5 unix socket).
+type targetAddrConn struct {
+	net.Conn
+	target net.Addr
+}
+
+func (c *targetAddrConn) RemoteAddr() net.Addr { return c.target }
+
+// tcpLikeAddr is a net.Addr whose String() is a host:port, for feeding the
+// knownhosts callback.
+type tcpLikeAddr string
+
+func (a tcpLikeAddr) Network() string { return "tcp" }
+func (a tcpLikeAddr) String() string  { return string(a) }
