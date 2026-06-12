@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package interstellar.exec.v1;
+
+option go_package = "github.com/talhaHavadar/interstellar/gen/exec/v1;execv1";
+
+// ExecService is the protocol behind "exec-endpoint" ports. The wormhole
+// providing the port (ssh, local-exec, ...) serves it on a local unix
+// socket for the life of a link; the consuming wormhole dials the socket
+// from the link descriptor. Only wormholes ever speak this protocol —
+// agents cannot reach it.
+service ExecService {
+  // Run executes one command and streams its output, ending with Exit.
+  rpc Run(RunRequest) returns (stream RunResponse);
+}
+
+message RunRequest {
+  // Argv is the program and its arguments, exec-style. Providers must not
+  // pass it through a shell.
+  repeated string argv = 1;
+  // Env sets additional environment variables.
+  map<string, string> env = 2;
+  // Dir is the working directory; empty means the provider's default.
+  string dir = 3;
+  // Stdin is fed to the process and closed. (Interactive stdin streaming
+  // is out of scope for v1.)
+  bytes stdin = 4;
+  // TimeoutMs kills the command after this many milliseconds; 0 means no
+  // provider-side timeout (the consumer's stream context still applies).
+  int64 timeout_ms = 5;
+}
+
+message RunResponse {
+  oneof event {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    // Terminal event; the stream closes after it.
+    Exit exit = 3;
+  }
+}
+
+message Exit {
+  // Code is the process exit code; -1 when the process did not run or was
+  // killed before exiting.
+  int32 code = 1;
+  // Error describes a failure to run or complete the command (as opposed
+  // to the command itself exiting non-zero).
+  string error = 2;
+}

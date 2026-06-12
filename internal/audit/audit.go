@@ -20,9 +20,12 @@ type Record struct {
 	Decision string          `json:"decision"` // "allow" or "deny"
 	Reason   string          `json:"reason,omitempty"`
 	Args     json.RawMessage `json:"args,omitempty"`
-	IsError  bool            `json:"is_error,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	Duration time.Duration   `json:"duration_ns,omitempty"`
+	// Targets maps each linked port to the target the call was routed
+	// through, capturing the full resolved chain for the record.
+	Targets  map[string]string `json:"targets,omitempty"`
+	IsError  bool              `json:"is_error,omitempty"`
+	Error    string            `json:"error,omitempty"`
+	Duration time.Duration     `json:"duration_ns,omitempty"`
 }
 
 // Log is a concurrency-safe JSONL appender.

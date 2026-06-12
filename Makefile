@@ -10,8 +10,12 @@ build:
 	go build -ldflags "$(LDFLAGS)" -o bin/interstellard ./cmd/interstellard
 
 # Each first-party wormhole builds to its own binary in bin/wormholes/.
+WORMHOLES := echo local-exec ssh sysinfo
 wormholes:
-	go build -o bin/wormholes/echo ./wormholes/echo
+	@for w in $(WORMHOLES); do \
+		echo "building wormhole $$w"; \
+		go build -o bin/wormholes/$$w ./wormholes/$$w || exit 1; \
+	done
 
 test:
 	go test ./...

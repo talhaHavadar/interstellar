@@ -23,11 +23,15 @@ See [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Early development. Working today: the MCP gateway (stdio + streamable HTTP),
-the wormhole plugin system and Go SDK, capability-based policy, and the audit
-log. Not yet implemented: link resolution between wormholes (the
-VPN → SSH → builder chaining), and the first real wormholes. Planned:
-snap packaging with wormholes as snap components.
+Early development, but the core is end-to-end. Working today: the MCP gateway
+(stdio + streamable HTTP), the wormhole plugin system and Go SDK,
+capability-based policy, the audit log, and **composition** — the session
+manager resolves the links a tool needs, chaining wormholes through
+admin-defined targets (including routing one wormhole's connection through
+another via `via`). First-party wormholes: `local-exec` and `ssh` (provide
+command execution), `sysinfo` (a purpose-built consumer), and `echo`. Not yet
+shipped: a VPN wormhole providing `network-context`, and snap packaging with
+wormholes as snap components.
 
 ## Quick start
 
@@ -49,8 +53,35 @@ Or run it locally over stdio, no HTTP involved:
 claude mcp add interstellar -- /path/to/interstellard --stdio --wormhole-dir /path/to/wormholes
 ```
 
-Ask the agent to call `interstellar__status` to see what's loaded, including
-tools hidden by policy and why.
+Ask the agent to call `interstellar__status` to see what's loaded — wormholes,
+tools (including ones hidden by policy or for lack of a target, and why), and
+the configured targets.
+
+### Composition
+
+Wormholes that need to reach a machine declare a typed port; an admin binds
+that port to a **target** in config. For example, point the `sysinfo`
+wormhole at the gateway host:
+
+```yaml
+# config.yaml
+targets:
+  localhost:
+    wormhole: local-exec
+    port: host
+```
+
+```sh
+bin/interstellard --config config.yaml --wormhole-dir bin/wormholes
+```
+
+Now `sysinfo__get_system_info` takes a `shell_target` argument (`localhost`),
+and the gateway routes the call through the `local-exec` wormhole. Swap in the
+`ssh` wormhole — optionally with `via` pointing at a VPN target — and the same
+tool runs on a remote machine behind a tunnel, without the tool or the agent
+knowing anything about the path. See
+[config.example.yaml](config.example.yaml) and
+[docs/architecture.md](docs/architecture.md).
 
 ### Docker
 

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/talhaHavadar/interstellar/internal/mcpserver"
 	"github.com/talhaHavadar/interstellar/internal/policy"
 	"github.com/talhaHavadar/interstellar/internal/registry"
+	"github.com/talhaHavadar/interstellar/internal/session"
 )
 
 // version is stamped by the build (-ldflags "-X main.version=...").
@@ -91,7 +93,17 @@ func run() error {
 		logger.Warn("no wormhole directory configured; only built-in tools are available")
 	}
 
-	server := mcpserver.New(version, reg, pol, aud, logger)
+	targets, err := buildTargets(cfg)
+	if err != nil {
+		return err
+	}
+	if err := session.Validate(reg, targets); err != nil {
+		return fmt.Errorf("invalid targets:\n%w", err)
+	}
+	sess := session.New(reg, logger, targets)
+	defer sess.Close()
+
+	server := mcpserver.New(version, reg, pol, sess, aud, logger)
 
 	if *stdio {
 		logger.Info("serving MCP over stdio", "version", version)
@@ -119,4 +131,29 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+// buildTargets converts the config's targets into session targets, marshaling
+// each opaque config block to JSON for delivery to the wormhole.
+func buildTargets(cfg *config.Config) (map[string]session.Target, error) {
+	targets := make(map[string]session.Target, len(cfg.Targets))
+	for name, t := range cfg.Targets {
+		configJSON := []byte("{}")
+		if t.Config != nil {
+			b, err := json.Marshal(t.Config)
+			if err != nil {
+				return nil, fmt.Errorf("target %q config: %w", name, err)
+			}
+			configJSON = b
+		}
+		targets[name] = session.Target{
+			Name:        name,
+			Wormhole:    t.Wormhole,
+			Port:        t.Port,
+			Config:      configJSON,
+			Via:         t.Via,
+			IdleTimeout: t.IdleTimeout,
+		}
+	}
+	return targets, nil
 }

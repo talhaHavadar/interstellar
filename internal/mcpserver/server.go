@@ -1,6 +1,7 @@
 // Package mcpserver is interstellar's north side: it presents the loaded
 // wormholes' tools to AI agents as a standard MCP server, with the policy
-// engine deciding what is exposed and the audit log seeing every call.
+// engine deciding what is exposed and the session manager resolving the
+// links a tool needs.
 package mcpserver
 
 import (
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,51 +21,162 @@ import (
 	"github.com/talhaHavadar/interstellar/internal/audit"
 	"github.com/talhaHavadar/interstellar/internal/policy"
 	"github.com/talhaHavadar/interstellar/internal/registry"
+	"github.com/talhaHavadar/interstellar/internal/session"
 	"github.com/talhaHavadar/interstellar/pkg/wormhole"
 )
 
-// New builds the MCP server over the loaded wormholes. Tools denied by
-// policy are not registered at all; they appear, with the denial reason, in
-// the interstellar__status tool so the omission is discoverable.
-func New(version string, reg *registry.Registry, pol *policy.Engine, aud *audit.Log, logger *slog.Logger) *mcp.Server {
+// portArg describes a required port surfaced to the agent as a target
+// argument on the tool.
+type portArg struct {
+	port     string // the tool's required port name
+	argName  string // the argument the agent sets, "<port>_target"
+	portType string
+	optional bool
+	targets  []string // compatible target names
+}
+
+// New builds the MCP server over the loaded wormholes. Tools are hidden when
+// policy denies them or when a non-optional required port has no compatible
+// target; either way the omission and its reason show up in
+// interstellar__status.
+func New(version string, reg *registry.Registry, pol *policy.Engine, sess *session.Manager, aud *audit.Log, logger *slog.Logger) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "interstellar",
 		Title:   "Interstellar",
 		Version: version,
 	}, nil)
 
-	status := buildStatus(version, reg, pol)
+	byType := targetsByType(reg, sess)
+
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "interstellar__status",
-		Description: "Describe this interstellar gateway: loaded wormholes, " +
-			"their tools (including tools hidden by policy and why), and their ports.",
+		Description: "Describe this interstellar gateway: loaded wormholes, their tools " +
+			"(including tools hidden by policy or for lack of a target, and why), their " +
+			"ports, and the configured targets a tool can be routed to.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
-		return nil, status, nil
+		return nil, buildStatus(version, reg, pol, sess, byType), nil
 	})
 
 	for _, w := range reg.All() {
 		for _, t := range w.Manifest.Tools {
 			if dec := pol.CheckTool(w.Manifest.Name, t); !dec.Allow {
-				logger.Info("tool hidden by policy",
-					"wormhole", w.Manifest.Name, "tool", t.Name, "reason", dec.Reason)
+				logger.Info("tool hidden by policy", "wormhole", w.Manifest.Name, "tool", t.Name, "reason", dec.Reason)
+				continue
+			}
+			ports, reason := portArgsFor(w, t, byType)
+			if reason != "" {
+				logger.Info("tool hidden", "wormhole", w.Manifest.Name, "tool", t.Name, "reason", reason)
+				continue
+			}
+			schema, err := augmentSchema(t.InputSchemaJson, ports)
+			if err != nil {
+				logger.Error("tool schema augmentation failed; hiding tool",
+					"wormhole", w.Manifest.Name, "tool", t.Name, "error", err)
 				continue
 			}
 			s.AddTool(&mcp.Tool{
 				Name:        toolName(w.Manifest.Name, t.Name),
 				Description: t.Description,
-				InputSchema: json.RawMessage(t.InputSchemaJson),
+				InputSchema: schema,
 				Annotations: annotationsFor(t),
-			}, callHandler(w, t, pol, aud, logger))
+			}, callHandler(w, t, ports, pol, sess, aud, logger))
 		}
 	}
 	return s
 }
 
-// toolName builds the agent-facing name: "<wormhole>__<tool>", using only
-// characters every MCP host accepts.
-func toolName(wormholeName, tool string) string {
-	return wormholeName + "__" + tool
+func toolName(wormholeName, tool string) string { return wormholeName + "__" + tool }
+
+// targetsByType groups configured target names by the port type they
+// provide, so a tool's required port can be offered the targets that fit it.
+func targetsByType(reg *registry.Registry, sess *session.Manager) map[string][]string {
+	byType := map[string][]string{}
+	if sess == nil {
+		return byType
+	}
+	for name, t := range sess.Targets() {
+		wh, ok := reg.Get(t.Wormhole)
+		if !ok {
+			continue
+		}
+		for _, p := range wh.Manifest.Provides {
+			if p.Name == t.Port {
+				byType[p.Type] = append(byType[p.Type], name)
+			}
+		}
+	}
+	for _, names := range byType {
+		sort.Strings(names)
+	}
+	return byType
+}
+
+// portArgsFor resolves a tool's required ports to target arguments. It
+// returns a non-empty reason when the tool must be hidden (a non-optional
+// port has no compatible target).
+func portArgsFor(w *registry.Wormhole, t *wormholev1.ToolSpec, byType map[string][]string) (args []portArg, hideReason string) {
+	for _, portName := range t.RequiresPorts {
+		spec := findPort(w.Manifest.Requires, portName)
+		if spec == nil {
+			// Validation should prevent this; fail closed.
+			return nil, fmt.Sprintf("required port %q is not declared in the manifest", portName)
+		}
+		targets := byType[spec.Type]
+		if len(targets) == 0 && !spec.Optional {
+			return nil, fmt.Sprintf("no configured target provides %q for required port %q", spec.Type, portName)
+		}
+		args = append(args, portArg{
+			port:     portName,
+			argName:  portName + "_target",
+			portType: spec.Type,
+			optional: spec.Optional,
+			targets:  targets,
+		})
+	}
+	return args, ""
+}
+
+// augmentSchema adds a target argument per required port to the tool's input
+// schema. Required (non-optional) ports add a required string argument whose
+// enum is the compatible targets.
+func augmentSchema(schemaJSON string, ports []portArg) (json.RawMessage, error) {
+	if len(ports) == 0 {
+		return json.RawMessage(schemaJSON), nil
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		return nil, fmt.Errorf("parsing input schema: %w", err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if props == nil {
+		props = map[string]any{}
+		schema["properties"] = props
+	}
+	required, _ := schema["required"].([]any)
+
+	for _, p := range ports {
+		desc := fmt.Sprintf("Interstellar target to route the %q connection (%s) through.", p.port, p.portType)
+		if p.optional {
+			desc += " Optional."
+		}
+		prop := map[string]any{"type": "string", "description": desc}
+		if len(p.targets) > 0 {
+			enum := make([]any, len(p.targets))
+			for i, name := range p.targets {
+				enum[i] = name
+			}
+			prop["enum"] = enum
+		}
+		props[p.argName] = prop
+		if !p.optional {
+			required = append(required, p.argName)
+		}
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return json.Marshal(schema)
 }
 
 func annotationsFor(t *wormholev1.ToolSpec) *mcp.ToolAnnotations {
@@ -89,55 +202,117 @@ func annotationsFor(t *wormholev1.ToolSpec) *mcp.ToolAnnotations {
 	return a
 }
 
-// callHandler routes one tool call south: policy check, audit, gRPC stream
-// to the wormhole, result back to the agent.
-func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, pol *policy.Engine, aud *audit.Log, logger *slog.Logger) mcp.ToolHandler {
+func findPort(ports []*wormholev1.PortSpec, name string) *wormholev1.PortSpec {
+	for _, p := range ports {
+		if p.Name == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// callHandler routes one tool call south: policy check, link resolution,
+// audit, gRPC stream to the wormhole, result back to the agent.
+func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, pol *policy.Engine, sess *session.Manager, aud *audit.Log, logger *slog.Logger) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		callID := newCallID()
 		start := time.Now()
-		args := req.Params.Arguments
 
 		record := audit.Record{
-			Time:     start,
-			CallID:   callID,
-			Wormhole: w.Manifest.Name,
-			Tool:     t.Name,
-			Args:     args,
+			Time: start, CallID: callID,
+			Wormhole: w.Manifest.Name, Tool: t.Name,
+			Args: req.Params.Arguments,
+		}
+		finish := func(res *mcp.CallToolResult, err error) (*mcp.CallToolResult, error) {
+			record.Duration = time.Since(start)
+			if res != nil {
+				record.IsError = res.IsError
+			}
+			if err != nil {
+				record.IsError = true
+				record.Error = err.Error()
+			}
+			aud.Write(record)
+			return res, err
 		}
 
-		// Policy is checked again per call: registration-time filtering keeps
-		// the surface clean, this keeps execution correct even if the two
-		// ever disagree.
 		if dec := pol.CheckTool(w.Manifest.Name, t); !dec.Allow {
 			record.Decision = "deny"
 			record.Reason = dec.Reason
-			aud.Write(record)
-			return toolError(dec.Reason), nil
+			return finish(toolError(dec.Reason), nil)
 		}
 		record.Decision = "allow"
 
-		if len(t.RequiresPorts) > 0 {
-			// Link resolution (the capability graph) is not implemented yet;
-			// refuse loudly rather than running a tool without its links.
-			msg := fmt.Sprintf("tool %q requires linked ports %v; link resolution is not implemented yet", t.Name, t.RequiresPorts)
-			record.IsError = true
-			record.Error = msg
-			record.Duration = time.Since(start)
-			aud.Write(record)
-			return toolError(msg), nil
+		// Resolve the links the tool needs, peeling the target arguments out
+		// of the arguments forwarded to the wormhole.
+		args := map[string]json.RawMessage{}
+		if len(req.Params.Arguments) > 0 {
+			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+				return finish(toolError(fmt.Sprintf("invalid arguments: %v", err)), nil)
+			}
+		}
+
+		var links []*wormholev1.Link
+		var leases []*session.Lease
+		releaseAll := func() {
+			for _, l := range leases {
+				l.Release()
+			}
+		}
+		for _, p := range ports {
+			raw, present := args[p.argName]
+			delete(args, p.argName)
+			var targetName string
+			if present {
+				if err := json.Unmarshal(raw, &targetName); err != nil {
+					releaseAll()
+					return finish(toolError(fmt.Sprintf("argument %q must be a target name string", p.argName)), nil)
+				}
+			}
+			if targetName == "" {
+				if p.optional {
+					continue
+				}
+				releaseAll()
+				return finish(toolError(fmt.Sprintf("argument %q is required: choose one of %v", p.argName, p.targets)), nil)
+			}
+			if !contains(p.targets, targetName) {
+				releaseAll()
+				return finish(toolError(fmt.Sprintf("unknown target %q for %q; choose one of %v", targetName, p.argName, p.targets)), nil)
+			}
+			lease, err := sess.Acquire(ctx, targetName)
+			if err != nil {
+				releaseAll()
+				return finish(toolError(fmt.Sprintf("connecting target %q: %v", targetName, err)), nil)
+			}
+			leases = append(leases, lease)
+			if record.Targets == nil {
+				record.Targets = map[string]string{}
+			}
+			record.Targets[p.port] = targetName
+			// The wormhole knows this link by its own required port name.
+			links = append(links, &wormholev1.Link{
+				LinkId:         lease.Link.LinkId,
+				PortName:       p.port,
+				Type:           lease.Link.Type,
+				DescriptorJson: lease.Link.DescriptorJson,
+			})
+		}
+		defer releaseAll()
+
+		forwardArgs, err := json.Marshal(args)
+		if err != nil {
+			return finish(nil, fmt.Errorf("re-encoding arguments: %w", err))
 		}
 
 		stream, err := w.Client.CallTool(ctx, &wormholev1.CallToolRequest{
 			CallId:        callID,
 			Tool:          t.Name,
-			ArgumentsJson: string(args),
+			ArgumentsJson: string(forwardArgs),
+			Links:         links,
 		})
 		if err != nil {
-			record.IsError = true
-			record.Error = err.Error()
-			record.Duration = time.Since(start)
-			aud.Write(record)
-			return nil, fmt.Errorf("calling wormhole %q: %w", w.Manifest.Name, err)
+			return finish(nil, fmt.Errorf("calling wormhole %q: %w", w.Manifest.Name, err))
 		}
 
 		var result *wormholev1.ToolResult
@@ -147,11 +322,7 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, pol *policy.Engin
 				err = fmt.Errorf("wormhole %q closed the stream without a result", w.Manifest.Name)
 			}
 			if err != nil {
-				record.IsError = true
-				record.Error = err.Error()
-				record.Duration = time.Since(start)
-				aud.Write(record)
-				return nil, err
+				return finish(nil, err)
 			}
 			switch e := ev.Event.(type) {
 			case *wormholev1.CallToolResponse_Log:
@@ -167,84 +338,30 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, pol *policy.Engin
 			}
 		}
 
-		record.IsError = result.IsError
-		record.Duration = time.Since(start)
-		aud.Write(record)
-
-		return &mcp.CallToolResult{
+		return finish(&mcp.CallToolResult{
 			IsError: result.IsError,
 			Content: []mcp.Content{&mcp.TextContent{Text: result.ContentJson}},
-		}, nil
+		}, nil)
 	}
 }
 
 func toolError(msg string) *mcp.CallToolResult {
-	return &mcp.CallToolResult{
-		IsError: true,
-		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
 	}
+	return false
 }
 
 func newCallID() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(err) // crypto/rand never fails on supported platforms
+		panic(err)
 	}
 	return hex.EncodeToString(b[:])
-}
-
-// status types are the payload of interstellar__status.
-type statusPayload struct {
-	Version   string           `json:"version"`
-	Wormholes []wormholeStatus `json:"wormholes"`
-}
-
-type wormholeStatus struct {
-	Name        string       `json:"name"`
-	Version     string       `json:"version"`
-	Description string       `json:"description,omitempty"`
-	Tools       []toolStatus `json:"tools"`
-	Provides    []portStatus `json:"provides,omitempty"`
-	Requires    []portStatus `json:"requires,omitempty"`
-}
-
-type toolStatus struct {
-	Name string `json:"name"`
-	// Exposed is false when policy hides the tool from agents.
-	Exposed bool   `json:"exposed"`
-	Reason  string `json:"reason,omitempty"`
-}
-
-type portStatus struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Optional bool   `json:"optional,omitempty"`
-}
-
-func buildStatus(version string, reg *registry.Registry, pol *policy.Engine) statusPayload {
-	payload := statusPayload{Version: version, Wormholes: []wormholeStatus{}}
-	for _, w := range reg.All() {
-		ws := wormholeStatus{
-			Name:        w.Manifest.Name,
-			Version:     w.Manifest.Version,
-			Description: w.Manifest.Description,
-			Tools:       []toolStatus{},
-		}
-		for _, t := range w.Manifest.Tools {
-			dec := pol.CheckTool(w.Manifest.Name, t)
-			ws.Tools = append(ws.Tools, toolStatus{
-				Name:    toolName(w.Manifest.Name, t.Name),
-				Exposed: dec.Allow,
-				Reason:  dec.Reason,
-			})
-		}
-		for _, p := range w.Manifest.Provides {
-			ws.Provides = append(ws.Provides, portStatus{Name: p.Name, Type: p.Type, Optional: p.Optional})
-		}
-		for _, p := range w.Manifest.Requires {
-			ws.Requires = append(ws.Requires, portStatus{Name: p.Name, Type: p.Type, Optional: p.Optional})
-		}
-		payload.Wormholes = append(payload.Wormholes, ws)
-	}
-	return payload
 }

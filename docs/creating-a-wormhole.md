@@ -83,39 +83,74 @@ call.Progress(0.4, "compiling")
 
 ## Ports (composition)
 
-Ports connect wormholes to each other; agents never see them. Declare what
-you need, and read the link inside the handler:
+Ports connect wormholes to each other; agents never see them. There are two
+sides — consuming a port and providing one.
+
+**Consuming.** Declare what you need, mark which tools need it, and read the
+link inside the handler. The agent picks *which* target the link routes to
+(the core injects a `<port>_target` argument); your handler just uses the
+link:
 
 ```go
 w.Require(wormhole.Port{
-    Name: "target", Type: wormhole.PortTypeExecEndpoint,
+    Name: "shell", Type: wormhole.PortTypeExecEndpoint,
     Description: "machine to build on",
 })
 
 wormhole.AddTool(w, wormhole.Tool[buildInput]{
     Name:          "build_source_package",
     Capabilities:  []wormhole.Capability{wormhole.CapExecScoped},
-    RequiresPorts: []string{"target"},
+    RequiresPorts: []string{"shell"},
     Handler: func(ctx context.Context, call *wormhole.Call, in buildInput) (any, error) {
-        link, _ := call.Link("target")
+        link, _ := call.Link("shell")
         var ep wormhole.ExecEndpointDescriptor
         if err := link.DecodeDescriptor(&ep); err != nil {
             return nil, err
         }
-        // dial ep.Address and run the build steps there
+        runner, err := wormhole.DialExecEndpoint(ep)
+        if err != nil {
+            return nil, err
+        }
+        defer runner.Close()
+        // Run a fixed, purpose-built sequence — never a caller-supplied command.
+        res, err := runner.Run(ctx, wormhole.Command{Argv: []string{"dpkg-buildpackage", "-S"}})
         ...
     },
 })
 ```
 
-Providing a port is the mirror image: `w.Provide(port, handler)`, where the
-handler brings the link up (connect the VPN, open the SSH session) and
-returns its descriptor plus a close function. See the descriptor types in
+[`wormholes/sysinfo`](../wormholes/sysinfo/main.go) is a complete consumer.
+
+**Providing.** `w.Provide(port, handler)` registers a handler that brings the
+link up (connect the VPN, open the SSH session) and returns its descriptor
+plus a close function the core calls on teardown. For exec endpoints the SDK
+does the heavy lifting — `ServeExecEndpoint` stands up the service on a
+socket; you supply a `CommandFunc` that runs one command wherever this
+wormhole reaches:
+
+```go
+w.Provide(
+    wormhole.Port{Name: "host", Type: wormhole.PortTypeExecEndpoint},
+    func(ctx context.Context, req *wormhole.LinkRequest) (*wormhole.ActiveLink, error) {
+        desc, stop, err := wormhole.ServeExecEndpoint(
+            wormhole.LinkSocketDir(req.LinkID), wormhole.RunLocalCommand)
+        if err != nil {
+            return nil, err
+        }
+        return &wormhole.ActiveLink{Descriptor: desc, Close: stop}, nil
+    },
+)
+```
+
+[`wormholes/local-exec`](../wormholes/local-exec/main.go) is the minimal
+provider; [`wormholes/ssh`](../wormholes/ssh/main.go) is one that *also*
+consumes an optional `network-context` port, so its connection can be routed
+through a VPN it knows nothing about. Descriptor types live in
 [`pkg/wormhole/port.go`](../pkg/wormhole/port.go).
 
-> Link resolution in the core is still in development; tools with
-> `RequiresPorts` are currently refused at call time. The SDK surface is in
-> place so wormholes can be written against it now.
+Targets — which configuration a port binds to — are defined by the server
+admin in config, not by wormholes or agents. See
+[architecture.md](architecture.md#composition-ports-and-links).
 
 ## Checklist before shipping
 

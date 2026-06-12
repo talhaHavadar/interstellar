@@ -5,8 +5,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/interstellard ./cmd/interstellard \
- && CGO_ENABLED=0 go build -o /out/wormholes/echo ./wormholes/echo
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/interstellard ./cmd/interstellard
+RUN for w in echo local-exec ssh sysinfo; do \
+      CGO_ENABLED=0 go build -o /out/wormholes/$w ./wormholes/$w; \
+    done
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/interstellard /usr/bin/interstellard

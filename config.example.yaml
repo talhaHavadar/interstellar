@@ -11,6 +11,42 @@ wormhole_dir: "/var/lib/interstellar/wormholes"
 # Append-only JSONL log of every tool call (allowed and denied).
 audit_log: "/var/lib/interstellar/audit.jsonl"
 
+# Targets are named endpoints a tool can be pointed at. Each binds a
+# wormhole's provided port to configuration the agent never sees. A tool that
+# requires a port gets a "<port>_target" argument whose choices are the
+# targets of a matching type. Targets are kept warm between calls and torn
+# down after idle_timeout.
+targets:
+  # The gateway host itself, via the local-exec wormhole.
+  localhost:
+    wormhole: local-exec
+    port: host
+
+  # A machine reached over SSH. With this configured, a tool requiring an
+  # exec-endpoint can be routed to "build-box".
+  build-box:
+    wormhole: ssh
+    port: target
+    idle_timeout: 5m
+    config:
+      host: build.internal
+      user: builder
+      key_file: /etc/interstellar/keys/builder
+      known_hosts_file: /etc/interstellar/known_hosts
+    # Route the SSH connection through a VPN by naming a network-context
+    # target for ssh's required "net" port. Drop `via` for a direct
+    # connection (ssh's net port is optional).
+    # via:
+    #   net: corp-vpn
+
+  # A VPN tunnel providing a network-context other targets route through.
+  # (Requires a vpn wormhole providing a "tunnel" port — not yet shipped.)
+  # corp-vpn:
+  #   wormhole: vpn-wireguard
+  #   port: tunnel
+  #   config:
+  #     config_file: /etc/interstellar/wg/corp.conf
+
 policy:
   # Capability classes denied for every wormhole unless re-allowed below.
   # Omit this key for the default ["exec.arbitrary"]; an explicit empty

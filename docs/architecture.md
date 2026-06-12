@@ -49,16 +49,25 @@ them:
 | `network-context` | SOCKS5 dialer socket path   | VPN wormhole     |
 | `exec-endpoint`   | gRPC exec service address   | SSH wormhole     |
 
-The target picture: `deb-builder` requires an `exec-endpoint`; `ssh`
-provides one and optionally requires a `network-context`; `vpn` provides
-that. When an agent asks to build a package on a machine behind a VPN, the
-core resolves the chain, opens links outside-in, and hands the builder its
-endpoint. The builder never knows there's a VPN; the VPN never knows what
-runs through it; the core sees — and audits — everything.
+The shipping picture: `sysinfo` requires an `exec-endpoint`; `ssh` and
+`local-exec` provide one; `ssh` optionally requires a `network-context` for
+routing through a tunnel. An admin defines **targets** in config — named
+bindings of a wormhole's provided port to its configuration (SSH host/user/
+key, VPN profile), optionally chained through other targets with `via`.
 
-Links are owned by the core: leased, reference-counted, reusable across
-calls. *(The resolver and session manager are the next milestone; today,
-tools that require ports are refused with a clear error.)*
+A tool that requires a port gains a `<port>_target` argument whose allowed
+values are the targets of a matching type; the agent chooses one per call.
+The core acquires a lease on that target, recursively bringing up any `via`
+upstreams outside-in (connect the VPN, then SSH *through* it), strips the
+target argument out, and hands the wormhole the resolved link. The builder
+never knows there's a VPN; the VPN never knows what runs through it; the core
+sees — and audits — the whole chain.
+
+Links are owned by the core's session manager: leased, reference-counted, and
+reused across calls, with each target kept warm for an idle timeout before
+teardown. Targets are validated at startup — missing wormholes/ports, type
+mismatches, unrouted required ports, and `via` cycles all fail loudly before
+the gateway serves.
 
 ## Policy and audit
 
@@ -84,9 +93,11 @@ generic shell.
 
 | Path | What | Stability |
 |------|------|-----------|
-| `proto/interstellar/wormhole/v1` | wire contract | pre-1.0, may still change |
+| `proto/interstellar/wormhole/v1` | core↔wormhole wire contract | pre-1.0, may still change |
+| `proto/interstellar/exec/v1` | exec-endpoint port protocol | pre-1.0, may still change |
 | `pkg/wormhole` | Go SDK for wormhole authors | public API |
 | `internal/registry` | plugin launch + manifest validation | internal |
+| `internal/session` | link resolution, leases, target validation | internal |
 | `internal/policy`, `internal/audit` | enforcement + log | internal |
 | `internal/mcpserver` | north-side MCP bridge | internal |
 | `cmd/interstellard` | the daemon | — |
