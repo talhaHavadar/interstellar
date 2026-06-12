@@ -142,11 +142,45 @@ w.Provide(
 )
 ```
 
-[`wormholes/local-exec`](../wormholes/local-exec/main.go) is the minimal
-provider; [`wormholes/ssh`](../wormholes/ssh/main.go) is one that *also*
-consumes an optional `network-context` port, so its connection can be routed
-through a VPN it knows nothing about. Descriptor types live in
-[`pkg/wormhole/port.go`](../pkg/wormhole/port.go).
+The two port types have a matching SDK helper each, so a provider only writes
+the part that's actually specific to it:
+
+| Port type | Helper | You supply |
+|-----------|--------|------------|
+| `exec-endpoint` | `ServeExecEndpoint(dir, CommandFunc)` | how to run one command |
+| `network-context` | `ServeNetworkContext(dir, DialFunc)` | how to dial one address |
+
+A `network-context` provider is just a dialer behind a SOCKS5 socket the
+helper manages — the tunnel is the only bespoke part:
+
+```go
+w.Provide(
+    wormhole.Port{Name: "tunnel", Type: wormhole.PortTypeNetworkContext},
+    func(ctx context.Context, req *wormhole.LinkRequest) (*wormhole.ActiveLink, error) {
+        tnet, closeTunnel, err := bringUpTunnel(req.Config)   // your tunnel
+        if err != nil {
+            return nil, err
+        }
+        desc, stop, err := wormhole.ServeNetworkContext(
+            wormhole.LinkSocketDir(req.LinkID), tnet.DialContext)
+        if err != nil {
+            closeTunnel()
+            return nil, err
+        }
+        return &wormhole.ActiveLink{Descriptor: desc, Close: func() error {
+            stop(); return closeTunnel()
+        }}, nil
+    },
+)
+```
+
+Worked examples: [`wormholes/local-exec`](../wormholes/local-exec/main.go)
+(minimal exec provider), [`wormholes/ssh`](../wormholes/ssh/main.go) (exec
+provider that *also* consumes an optional `network-context`, so it can be
+tunnelled without knowing how), and [`wormholes/vpn-wireguard`](../wormholes/vpn-wireguard/main.go)
+/ [`wormholes/tailscale`](../wormholes/tailscale/main.go) (network-context
+providers — note both are ~40 lines plus their tunnel-specific code).
+Descriptor types live in [`pkg/wormhole/port.go`](../pkg/wormhole/port.go).
 
 Targets — which configuration a port binds to — are defined by the server
 admin in config, not by wormholes or agents. See

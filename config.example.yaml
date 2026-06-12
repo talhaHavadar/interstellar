@@ -33,19 +33,32 @@ targets:
       user: builder
       key_file: /etc/interstellar/keys/builder
       known_hosts_file: /etc/interstellar/known_hosts
-    # Route the SSH connection through a VPN by naming a network-context
+      # Auth can also be a password (prefer password_env over inline) or the
+      # SSH agent (use_agent: true, for smartcard/security keys).
+    # Route the SSH connection through a tunnel by naming a network-context
     # target for ssh's required "net" port. Drop `via` for a direct
     # connection (ssh's net port is optional).
     # via:
     #   net: corp-vpn
 
-  # A VPN tunnel providing a network-context other targets route through.
-  # (Requires a vpn wormhole providing a "tunnel" port — not yet shipped.)
-  # corp-vpn:
-  #   wormhole: vpn-wireguard
-  #   port: tunnel
+  # A WireGuard tunnel providing a network-context other targets route
+  # through. Userspace (no root, no kernel interface); config_file is a
+  # standard wg-quick file.
+  corp-vpn:
+    wormhole: vpn-wireguard
+    port: tunnel
+    idle_timeout: 10m
+    config:
+      config_file: /etc/interstellar/wg/corp.conf
+
+  # A Tailscale tailnet as a network-context. Embeds a userspace node via
+  # tsnet; the auth key is read from the environment, not stored here.
+  # tailnet:
+  #   wormhole: tailscale
+  #   port: tailnet
   #   config:
-  #     config_file: /etc/interstellar/wg/corp.conf
+  #     hostname: interstellar-gw
+  #     authkey_env: TS_AUTHKEY
 
 policy:
   # Capability classes denied for every wormhole unless re-allowed below.

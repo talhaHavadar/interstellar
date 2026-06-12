@@ -6,16 +6,16 @@ targets:
     wormhole: local-exec
     port: host
 
-  # A remote machine over SSH, authenticated through the SSH agent
-  # (smartcard/security-key keys have no key file). The agent socket is
-  # inherited from the environment via $SSH_AUTH_SOCK.
-  remote:
-    wormhole: ssh
-    port: target
-    idle_timeout: 5m
-    config:
-      host: 100.93.222.5
-      user: talha
-      # Password is read from $INTERSTELLAR_REMOTE_PASSWORD, not stored here.
-      password_env: INTERSTELLAR_REMOTE_PASSWORD
-      known_hosts_file: /Users/talha/.ssh/known_hosts
+# A remote machine over SSH, authenticated through the SSH agent
+# (smartcard/security-key keys have no key file). The agent socket is
+# inherited from the environment via $SSH_AUTH_SOCK.
+# remote:
+#   wormhole: ssh
+#   port: target
+#   idle_timeout: 5m
+#   config:
+#     host: 100.93.222.5
+#     user: talha
+#     # Password is read from $INTERSTELLAR_REMOTE_PASSWORD, not stored here.
+#     password_env: INTERSTELLAR_REMOTE_PASSWORD
+#     known_hosts_file: /Users/talha/.ssh/known_hosts

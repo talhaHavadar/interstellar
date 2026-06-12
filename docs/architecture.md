@@ -44,10 +44,17 @@ that let wormholes chain without knowing each other.
 Port types define the schema of the **link descriptor** that travels over
 them:
 
-| Port type         | Descriptor                  | Example provider |
-|-------------------|-----------------------------|------------------|
-| `network-context` | SOCKS5 dialer socket path   | VPN wormhole     |
-| `exec-endpoint`   | gRPC exec service address   | SSH wormhole     |
+| Port type         | Descriptor                  | Providers                  |
+|-------------------|-----------------------------|----------------------------|
+| `network-context` | SOCKS5 dialer socket path   | `vpn-wireguard`, `tailscale` |
+| `exec-endpoint`   | gRPC exec service address   | `local-exec`, `ssh`        |
+
+A `network-context` provider is just a userspace dialer behind a SOCKS5
+server on a unix socket (the SDK's `ServeNetworkContext` does the SOCKS5
+part). `vpn-wireguard` brings up a WireGuard tunnel with wireguard-go's
+netstack; `tailscale` embeds a node with `tsnet` — no root, no kernel
+interface, no container. A consumer like `ssh` dials through the socket with
+plain SOCKS5 and never knows which kind of tunnel is behind it.
 
 The shipping picture: `sysinfo` requires an `exec-endpoint`; `ssh` and
 `local-exec` provide one; `ssh` optionally requires a `network-context` for
