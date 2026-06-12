@@ -1,0 +1,26 @@
+# interstellard configuration. All keys are optional; unknown keys are
+# rejected at startup.
+
+# HTTP address of the streamable MCP endpoint. Keep it on loopback unless
+# you put authentication in front of the gateway.
+listen: "127.0.0.1:8420"
+
+# Directory scanned for wormhole plugin executables at startup.
+wormhole_dir: "/var/lib/interstellar/wormholes"
+
+# Append-only JSONL log of every tool call (allowed and denied).
+audit_log: "/var/lib/interstellar/audit.jsonl"
+
+policy:
+  # Capability classes denied for every wormhole unless re-allowed below.
+  # Omit this key for the default ["exec.arbitrary"]; an explicit empty
+  # list denies nothing. Valid classes: read, write, network, exec.scoped,
+  # exec.arbitrary. A typo here fails at startup.
+  deny_capabilities: [exec.arbitrary]
+
+  wormholes: {}
+    # Example: trust one wormhole with caller-supplied commands, and block
+    # some of its tools entirely.
+    # some-shell:
+    #   allow_capabilities: [exec.arbitrary]
+    #   deny_tools: ["*_destructive"]

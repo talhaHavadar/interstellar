@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package interstellar.wormhole.v1;
+
+option go_package = "github.com/talhaHavadar/interstellar/gen/wormhole/v1;wormholev1";
+
+// WormholeService is the contract between the interstellar core and a
+// wormhole plugin process. The core launches the wormhole as a subprocess
+// (hashicorp/go-plugin handshake) and speaks this service over gRPC on a
+// local socket. Agents never talk to this service directly; the core
+// mediates every call.
+service WormholeService {
+  // Describe returns the wormhole's manifest: identity, tools, and ports.
+  // Called once at load time. A manifest that fails core-side validation
+  // causes the wormhole to be rejected.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // CallTool executes one of the manifest's tools. Events stream back so
+  // long-running operations (builds, deployments) can report progress and
+  // logs incrementally before the final result.
+  rpc CallTool(CallToolRequest) returns (stream CallToolResponse);
+
+  // OpenLink brings up one of the wormhole's provided ports (e.g. connect
+  // a VPN, establish an SSH session). The stream stays open for the life
+  // of the link; state changes flow back until CloseLink or disconnect.
+  rpc OpenLink(OpenLinkRequest) returns (stream OpenLinkResponse);
+
+  // CloseLink tears down a link previously opened with OpenLink.
+  rpc CloseLink(CloseLinkRequest) returns (CloseLinkResponse);
+
+  // Health reports liveness; the core polls it to detect wedged plugins.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// Capability classifies what a tool is allowed to do. The core's policy
+// engine enforces these classes; they are not advisory. Using an enum (not
+// free-form strings) makes invalid capabilities unrepresentable on the wire.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  // Reads state, no side effects (query status, fetch logs).
+  CAPABILITY_READ = 1;
+  // Mutates state through a fixed, parameterized procedure.
+  CAPABILITY_WRITE = 2;
+  // Establishes or alters network connectivity (VPN, tunnels).
+  CAPABILITY_NETWORK = 3;
+  // Runs a fixed, purpose-built procedure that happens to execute commands
+  // (e.g. "build a debian package"). The commands are chosen by the
+  // wormhole, not the caller.
+  CAPABILITY_EXEC_SCOPED = 4;
+  // Executes caller-supplied commands. Denied by default policy; an admin
+  // must explicitly opt a wormhole into this class.
+  CAPABILITY_EXEC_ARBITRARY = 5;
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  Manifest manifest = 1;
+}
+
+// Manifest declares everything the core needs to know about a wormhole.
+message Manifest {
+  // Unique name, lowercase kebab-case (e.g. "deb-builder").
+  string name = 1;
+  // Semantic version of the wormhole itself.
+  string version = 2;
+  // One-line human description.
+  string description = 3;
+  repeated ToolSpec tools = 4;
+  // Ports this wormhole can offer to other wormholes.
+  repeated PortSpec provides = 5;
+  // Ports this wormhole needs from other wormholes.
+  repeated PortSpec requires = 6;
+}
+
+// ToolSpec describes one agent-facing operation.
+message ToolSpec {
+  // Tool name, lowercase snake_case (e.g. "build_source_package").
+  string name = 1;
+  string description = 2;
+  // JSON Schema (draft 2020-12) for the tool's arguments.
+  string input_schema_json = 3;
+  // Capability classes this tool exercises. At least one is required;
+  // CAPABILITY_UNSPECIFIED is rejected at load time.
+  repeated Capability capabilities = 4;
+  // Names of entries in Manifest.requires that must be linked before this
+  // tool can run. Empty for tools that need no upstream connection.
+  repeated string requires_ports = 5;
+}
+
+// PortSpec describes a typed connection point for wormhole composition.
+message PortSpec {
+  // Local name unique within the manifest (e.g. "target").
+  string name = 1;
+  // Port type from the port-type registry (e.g. "exec-endpoint",
+  // "network-context"). Consumers and providers match on this string.
+  string type = 2;
+  // A required port marked optional may be left unlinked; the wormhole
+  // must then degrade gracefully (e.g. SSH directly instead of via VPN).
+  bool optional = 3;
+  string description = 4;
+}
+
+// Link is a live, typed connection handle passed to a wormhole. The
+// descriptor payload schema is defined per port type (for example,
+// "network-context" carries the address of a SOCKS5 dialer socket).
+message Link {
+  // Identifier assigned by the core's session manager.
+  string link_id = 1;
+  // Which PortSpec (by name) this link satisfies, from the receiver's view.
+  string port_name = 2;
+  // Port type of the connection.
+  string type = 3;
+  // JSON descriptor whose schema is defined by the port type.
+  string descriptor_json = 4;
+}
+
+message CallToolRequest {
+  // Correlation id assigned by the core; appears in the audit log.
+  string call_id = 1;
+  string tool = 2;
+  // JSON object matching the tool's input schema.
+  string arguments_json = 3;
+  // One link per name in the tool's requires_ports.
+  repeated Link links = 4;
+}
+
+message CallToolResponse {
+  oneof event {
+    LogEvent log = 1;
+    ProgressEvent progress = 2;
+    // Terminal event; the stream closes after it.
+    ToolResult result = 3;
+  }
+}
+
+message LogEvent {
+  // "debug", "info", "warn", or "error".
+  string level = 1;
+  string message = 2;
+}
+
+message ProgressEvent {
+  // Completion fraction in [0,1]; -1 when indeterminate.
+  double fraction = 1;
+  string message = 2;
+}
+
+message ToolResult {
+  bool is_error = 1;
+  // JSON payload returned to the agent.
+  string content_json = 2;
+}
+
+message OpenLinkRequest {
+  // Identifier assigned by the core for the new link.
+  string link_id = 1;
+  // Which provided port (by name) to bring up.
+  string port_name = 2;
+  // Admin-supplied configuration for this link (e.g. which VPN profile),
+  // resolved by the core from server config — never from the agent.
+  string config_json = 3;
+  // Upstream links this link should be established through.
+  repeated Link links = 4;
+}
+
+message OpenLinkResponse {
+  oneof event {
+    // First event on success: the link is live and carries its descriptor.
+    LinkUp up = 1;
+    LinkState state = 2;
+    LogEvent log = 3;
+  }
+}
+
+message LinkUp {
+  Link link = 1;
+}
+
+message LinkState {
+  // "up", "degraded", or "closed".
+  string state = 1;
+  string message = 2;
+}
+
+message CloseLinkRequest {
+  string link_id = 1;
+}
+
+message CloseLinkResponse {}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+}
