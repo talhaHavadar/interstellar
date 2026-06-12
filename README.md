@@ -32,8 +32,10 @@ another via `via`). First-party wormholes:
 
 - **exec-endpoint providers:** `local-exec` (gateway host), `ssh` (remote, with
   key / password / agent auth, optionally tunnelled)
-- **network-context providers:** `vpn-wireguard` (userspace WireGuard),
-  `tailscale` (userspace tsnet) — both no-root, no-container
+- **network-context providers:** `wireguard` (userspace WireGuard,
+  no-root/no-container) and `tailscale` (userspace tsnet) live in the separate
+  [wormholes](https://github.com/talhaHavadar/wormholes) repo, where
+  heavy-dependency and third-party wormholes are kept so the core stays lean
 - **consumers:** `sysinfo`, `uname`
 - `echo` (self-contained, for trying the gateway out)
 

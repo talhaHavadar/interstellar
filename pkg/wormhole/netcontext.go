@@ -10,7 +10,7 @@ import (
 
 // ServeNetworkContext stands up a SOCKS5 server on a unix socket under dir,
 // routing every connection through dial, and returns the descriptor plus a
-// stop function. Provider wormholes (vpn-wireguard, tailscale, ...) call this
+// stop function. Provider wormholes (wireguard, tailscale, ...) call this
 // from a LinkHandler:
 //
 //	desc, stop, err := wormhole.ServeNetworkContext(wormhole.LinkSocketDir(req.LinkID), tnet.DialContext)

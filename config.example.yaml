@@ -43,16 +43,19 @@ targets:
 
   # A WireGuard tunnel providing a network-context other targets route
   # through. Userspace (no root, no kernel interface); config_file is a
-  # standard wg-quick file.
+  # standard wg-quick file. The wireguard wormhole is built from the separate
+  # `wormholes` repo.
   corp-vpn:
-    wormhole: vpn-wireguard
+    wormhole: wireguard
     port: tunnel
     idle_timeout: 10m
     config:
       config_file: /etc/interstellar/wg/corp.conf
 
   # A Tailscale tailnet as a network-context. Embeds a userspace node via
-  # tsnet; the auth key is read from the environment, not stored here.
+  # tsnet; the auth key is read from the environment, not stored here. The
+  # tailscale wormhole is built from the separate `wormholes` repo (its
+  # binary just needs to be in --wormhole-dir).
   # tailnet:
   #   wormhole: tailscale
   #   port: tailnet
