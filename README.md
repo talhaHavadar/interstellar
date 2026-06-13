@@ -69,32 +69,6 @@ Ask the agent to call `interstellar__status` to see what's loaded — wormholes,
 tools (including ones hidden by policy or for lack of a target, and why), and
 the configured targets.
 
-### Composition
-
-Wormholes that need to reach a machine declare a typed port; an admin binds
-that port to a **target** in config. For example, point the `sysinfo`
-wormhole at the gateway host:
-
-```yaml
-# config.yaml
-targets:
-  localhost:
-    wormhole: local-exec
-    port: host
-```
-
-```sh
-bin/interstellard --config config.yaml --wormhole-dir bin/wormholes
-```
-
-Now `sysinfo__get_system_info` takes a `shell_target` argument (`localhost`),
-and the gateway routes the call through the `local-exec` wormhole. Swap in the
-`ssh` wormhole — optionally with `via` pointing at a VPN target — and the same
-tool runs on a remote machine behind a tunnel, without the tool or the agent
-knowing anything about the path. See
-[config.example.yaml](config.example.yaml) and
-[docs/architecture.md](docs/architecture.md).
-
 ### Docker
 
 The easiest way to self-host is the **[compose deployment](deploy/interstellar-mcp/README.md)** —
@@ -120,6 +94,32 @@ docker run -p 8420:8420 -v interstellar-data:/var/lib/interstellar \
 ```
 
 The image's audit log and config live under `/var/lib/interstellar`.
+
+### Composition
+
+Wormholes that need to reach a machine declare a typed port; an admin binds
+that port to a **target** in config. For example, point the `sysinfo`
+wormhole at the gateway host:
+
+```yaml
+# config.yaml
+targets:
+  localhost:
+    wormhole: local-exec
+    port: host
+```
+
+```sh
+bin/interstellard --config config.yaml --wormhole-dir bin/wormholes
+```
+
+Now `sysinfo__get_system_info` takes a `shell_target` argument (`localhost`),
+and the gateway routes the call through the `local-exec` wormhole. Swap in the
+`ssh` wormhole — optionally with `via` pointing at a VPN target — and the same
+tool runs on a remote machine behind a tunnel, without the tool or the agent
+knowing anything about the path. See
+[config.example.yaml](config.example.yaml) and
+[docs/architecture.md](docs/architecture.md).
 
 ## Configuration
 
