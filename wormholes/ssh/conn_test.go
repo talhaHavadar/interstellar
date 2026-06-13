@@ -38,8 +38,13 @@ func TestParseConfigDefaultsAndValidation(t *testing.T) {
 }
 
 func TestHostKeyCallbackRequiresVerification(t *testing.T) {
-	if _, err := hostKeyCallback(&sshConfig{}); err == nil {
-		t.Error("absent host key config must fail closed")
+	_, err := hostKeyCallback(&sshConfig{})
+	if err == nil {
+		t.Fatal("absent host key config must fail closed")
+	}
+	// The error should point users at the quick workaround.
+	if !strings.Contains(err.Error(), "insecure_skip_host_key_check") {
+		t.Errorf("error should suggest the insecure_skip_host_key_check workaround, got: %v", err)
 	}
 	if _, err := hostKeyCallback(&sshConfig{InsecureSkipHostKeyCheck: true}); err != nil {
 		t.Errorf("explicit insecure opt-out should be allowed: %v", err)

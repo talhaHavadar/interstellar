@@ -241,8 +241,11 @@ func hostKeyCallback(cfg *sshConfig) (ssh.HostKeyCallback, error) {
 		}
 		return cb, nil
 	default:
-		return nil, fmt.Errorf("ssh target config: set known_hosts_file or host_key for verification, " +
-			"or insecure_skip_host_key_check to disable it deliberately")
+		return nil, fmt.Errorf("ssh host-key verification is not configured for this target. " +
+			"Set `known_hosts_file` (recommended) or `host_key` to verify the host. " +
+			"Quick workaround if you don't want a known_hosts file: add " +
+			"`insecure_skip_host_key_check: true` to the target's config to accept any host key " +
+			"(safe enough over an already-encrypted tunnel like Tailscale/WireGuard; risky over a direct connection)")
 	}
 }
 
