@@ -19,7 +19,7 @@ AI agent ──MCP (JSON-RPC)──▶ interstellard ──gRPC──▶ wormhol
 ```
 
 **Design stance:** wormholes expose _specific, typed operations_
-(`deb-builder__build_source_package(distro, arch)`), not generic command
+(`deb-builder__build_source_package(url)`), not generic command
 runners. Raw execution travels between wormholes over typed ports that agents
 never see, and tools that accept caller-supplied commands are denied by
 default policy until a server admin explicitly opts in.
