@@ -36,14 +36,19 @@ func main() {
 }
 
 func run() error {
+	var wormholeDirs []string
 	var (
 		configPath  = flag.String("config", "", "path to YAML config file")
 		listen      = flag.String("listen", "", "HTTP listen address for the MCP endpoint (overrides config)")
 		stdio       = flag.Bool("stdio", false, "serve MCP over stdio instead of HTTP (for local agents)")
-		wormholeDir = flag.String("wormhole-dir", "", "directory of wormhole plugin executables (overrides config)")
 		auditPath   = flag.String("audit-log", "", "path of the JSONL audit log (overrides config)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
+	flag.Func("wormhole-dir", "directory of wormhole plugin executables; repeat to load from several (overrides config)",
+		func(dir string) error {
+			wormholeDirs = append(wormholeDirs, dir)
+			return nil
+		})
 	flag.Parse()
 
 	if *showVersion {
@@ -62,11 +67,16 @@ func run() error {
 	if *listen != "" {
 		cfg.Listen = *listen
 	}
-	if *wormholeDir != "" {
-		cfg.WormholeDir = *wormholeDir
-	}
 	if *auditPath != "" {
 		cfg.AuditLog = *auditPath
+	}
+
+	// Effective wormhole directories: the repeatable flag wins; otherwise the
+	// single dir from config. Loading from several lets the image's built-in
+	// wormholes and an operator's extra (e.g. mounted) wormholes coexist.
+	wormholeDirList := wormholeDirs
+	if len(wormholeDirList) == 0 && cfg.WormholeDir != "" {
+		wormholeDirList = []string{cfg.WormholeDir}
 	}
 
 	pol, err := policy.New(cfg.Policy)
@@ -85,12 +95,15 @@ func run() error {
 
 	reg := registry.New(logger)
 	defer reg.Close()
-	if cfg.WormholeDir != "" {
-		if err := reg.LoadDir(ctx, cfg.WormholeDir); err != nil {
-			return err
-		}
-	} else {
+	if len(wormholeDirList) == 0 {
 		logger.Warn("no wormhole directory configured; only built-in tools are available")
+	}
+	for _, dir := range wormholeDirList {
+		// A missing or unreadable extra directory is not fatal — load what we
+		// can and warn, so one bad mount doesn't take the gateway down.
+		if err := reg.LoadDir(ctx, dir); err != nil {
+			logger.Warn("skipping wormhole directory", "dir", dir, "error", err)
+		}
 	}
 
 	targets, err := buildTargets(cfg)
