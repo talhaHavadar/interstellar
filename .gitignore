@@ -2,3 +2,10 @@
 *.jsonl
 *.snap
 *.comp
+
+# Secrets for the compose deployment — never commit these.
+deploy/interstellar-mcp/.env
+deploy/interstellar-mcp/config.yaml
+deploy/interstellar-mcp/wormholes/
+interstellard
+
