@@ -6,15 +6,16 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/interstellard ./cmd/interstellard
-RUN for w in echo local-exec ssh sysinfo uname; do \
-      CGO_ENABLED=0 go build -o /out/wormholes/$w ./wormholes/$w; \
+# Stage the runtime state directory (wormholes live here; the audit log and any
+# mounted config land here too) so it can be copied with the right owner.
+RUN mkdir -p /out/state/wormholes && \
+    for w in echo local-exec ssh sysinfo uname; do \
+      CGO_ENABLED=0 go build -o /out/state/wormholes/$w ./wormholes/$w; \
     done
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/interstellard /usr/bin/interstellard
-# First-party wormholes ship in the image; mount extra ones over this
-# directory (or alongside) to extend the gateway.
-COPY --from=build /out/wormholes /var/lib/interstellar/wormholes
+COPY --from=build --chown=nonroot:nonroot /out/state /var/lib/interstellar
 VOLUME /var/lib/interstellar
 EXPOSE 8420
 ENTRYPOINT ["/usr/bin/interstellard"]
