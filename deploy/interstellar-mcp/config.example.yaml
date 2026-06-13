@@ -1,0 +1,30 @@
+# Interstellar gateway config for docker-compose.
+# Secrets (passwords, auth keys) come from the environment (.env), never here.
+# Full reference: ../../config.example.yaml
+targets:
+# A machine reachable over SSH. Uncomment and fill in to expose the ssh
+# exec-endpoint, then sysinfo/uname can be routed to `myserver`.
+#
+# myserver:
+#   wormhole: ssh
+#   port: target
+#   idle_timeout: 5m
+#   config:
+#     host: 10.0.0.5
+#     user: ops
+#     # Either a password from the environment...
+#     password_env: INTERSTELLAR_REMOTE_PASSWORD
+#     # ...or a key mounted into the container:
+#     # key_file: /etc/interstellar/keys/ops
+#     # Host-key verification — mount a known_hosts file:
+#     known_hosts_file: /etc/interstellar/known_hosts
+policy:
+  # exec.arbitrary is denied by default; opt specific wormholes in here.
+  deny_capabilities: [exec.arbitrary]
+  wormholes: {}
+
+# NOTE: the built-in local-exec / sysinfo / uname wormholes run commands inside
+# THIS container, which is a minimal (distroless) image with no shell or
+# coreutils — so a "localhost" exec target is not useful here. The gateway is
+# for reaching OTHER machines (over SSH, optionally tunnelled). The `echo`
+# wormhole works with no config, for a quick liveness check.

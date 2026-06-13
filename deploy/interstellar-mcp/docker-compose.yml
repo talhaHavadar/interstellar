@@ -1,0 +1,74 @@
+# Interstellar gateway — docker-compose deployment.
+#
+#   1. cp .env.example .env        # then fill in any secrets you need
+#   2. edit config.yaml            # define your targets
+#   3. docker compose up -d
+#
+# The MCP endpoint is then at http://127.0.0.1:8420.
+services:
+  # ---- optional wormhole installers ----------------------------------------
+  # Each installer copies its wormhole binary into the shared `extra-wormholes`
+  # volume and exits; the gateway loads it from there. To add a wormhole:
+  # uncomment its installer below AND its matching entry under
+  # `interstellar.depends_on`. No manual building or copying required.
+  #
+  install-tailscale:
+    image: ghcr.io/talhahavadar/wormhole-tailscale:latest
+    volumes:
+      - extra-wormholes:/out
+    restart: "no"
+  #
+  # install-wireguard:
+  #   image: ghcr.io/talhahavadar/wormhole-wireguard:latest
+  #   volumes:
+  #     - extra-wormholes:/out
+  #   restart: "no"
+  interstellar:
+    image: ghcr.io/talhahavadar/interstellar:latest
+    # To build from a local checkout instead of pulling the published image,
+    # comment out `image:` above and uncomment:
+    # build:
+    #   context: ../..
+    restart: unless-stopped
+    # Wait for the installers you enabled above to finish copying their
+    # binaries, so the gateway sees them on startup.
+    depends_on:
+      install-tailscale:
+        condition: service_completed_successfully
+    #   install-wireguard:
+    #     condition: service_completed_successfully
+
+    # The MCP HTTP endpoint has NO built-in authentication. It is bound to
+    # loopback so only this host can reach it; expose it to other machines via
+    # an SSH tunnel, a Tailscale ACL, or a reverse proxy that adds auth — NOT by
+    # changing this to 0.0.0.0 on an untrusted network.
+    ports:
+      - "127.0.0.1:8420:8420"
+    command:
+      - --listen=0.0.0.0:8420
+      - --config=/etc/interstellar/config.yaml
+      # --wormhole-dir is repeatable: the image's built-ins, then installed extras.
+      - --wormhole-dir=/var/lib/interstellar/wormholes
+      - --wormhole-dir=/opt/interstellar/wormholes
+      - --audit-log=/var/lib/interstellar/audit.jsonl
+    volumes:
+      # Your gateway config (targets + policy). Read-only; must be readable by
+      # the container's nonroot user — e.g. `chmod 644 config.yaml`.
+      - ./config.yaml:/etc/interstellar/config.yaml:ro
+      # Persists the audit log across restarts; also carries the built-in
+      # wormholes (see README re: image upgrades).
+      - interstellar-data:/var/lib/interstellar
+      # Wormholes added by the installer services above, mounted read-only.
+      - extra-wormholes:/opt/interstellar/wormholes:ro
+    # Secrets (SSH passwords, Tailscale auth keys, ...) come from the
+    # environment, never from config.yaml. See .env.example.
+    env_file:
+      - .env
+    # Drop privileges and limit blast radius. The userspace VPN/Tailscale
+    # wormholes need no extra capabilities; if you add a wormhole that does,
+    # grant it explicitly here.
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  interstellar-data:
+  extra-wormholes:

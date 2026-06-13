@@ -97,13 +97,29 @@ knowing anything about the path. See
 
 ### Docker
 
+The easiest way to self-host is the **[compose deployment](deploy/interstellar-mcp/README.md)** —
+config, secrets, persistence, and optional wormhole installers all wired up:
+
 ```sh
-docker build -t interstellar .
-docker run -p 8420:8420 -v interstellar-data:/var/lib/interstellar interstellar
+cd deploy/interstellar-mcp
+cp .env.example .env     # secrets (optional to start)
+$EDITOR config.yaml      # define your targets
+docker compose up -d     # gateway on http://127.0.0.1:8420
 ```
 
-Add wormholes by mounting their binaries into
-`/var/lib/interstellar/wormholes`.
+Adding a wormhole like `tailscale` is just uncommenting its installer service —
+no building or copying, multi-arch images handle the rest. See the
+[compose README](deploy/interstellar-mcp/README.md).
+
+For a quick one-off, the published image also runs standalone:
+
+```sh
+docker run -p 8420:8420 -v interstellar-data:/var/lib/interstellar \
+  ghcr.io/talhahavadar/interstellar:latest
+# build locally instead: docker build -t interstellar . && docker run ...
+```
+
+The image's audit log and config live under `/var/lib/interstellar`.
 
 ## Configuration
 
