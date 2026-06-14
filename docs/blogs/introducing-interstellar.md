@@ -5,7 +5,7 @@ author: "Talha Can Havadar"
 date: "2026-06-14"
 tags: [ai, agents, mcp, infrastructure, security]
 published_on:
-  - <URL>
+  - https://www.linkedin.com/pulse/introducing-interstellar-gateway-tame-your-ai-agents-havadar-kxqme/
 ---
 
 # Introducing Interstellar — A Gateway to Tame Your AI Agents
