@@ -63,6 +63,24 @@ targets:
   #     hostname: interstellar-gw
   #     authkey_env: TS_AUTHKEY
 
+  # A third-party MCP server held by the mcp-stdio provider and offered as an
+  # mcp-endpoint. A purpose-built consumer wormhole (e.g. mcp-client-greeter, a
+  # reference example in the separate wormholes repo) requires this port and
+  # exposes only its own curated tools; the upstream server's
+  # raw tools are never shown to the agent. The upstream's own credentials are
+  # supplied as ambient environment to interstellard and inherited by the
+  # spawned subprocess — keep them out of this file.
+  # greeter-backend:
+  #   wormhole: mcp-stdio
+  #   port: server
+  #   config:
+  #     command: mcp-greeter
+  #     args: []
+  #     # env adds/overrides variables for the subprocess on top of the
+  #     # inherited environment.
+  #     # env:
+  #     #   SOME_FLAG: "1"
+
 policy:
   # Capability classes denied for every wormhole unless re-allowed below.
   # Omit this key for the default ["exec.arbitrary"]; an explicit empty

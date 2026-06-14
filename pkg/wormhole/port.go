@@ -17,6 +17,14 @@ const (
 	// ExecEndpointDescriptor. The provider (e.g. an SSH wormhole) hosts an
 	// execution service for the life of the link.
 	PortTypeExecEndpoint = "exec-endpoint"
+
+	// PortTypeMCPEndpoint is a live session to an upstream third-party MCP
+	// server. Descriptor: MCPEndpointDescriptor. The provider (e.g. mcp-stdio)
+	// holds the upstream session and serves a normalized tool-proxy on a local
+	// unix socket; a purpose-built consumer dials it to fulfill its own
+	// hand-written tools by calling specific upstream tools. The upstream is
+	// never exposed to agents directly.
+	PortTypeMCPEndpoint = "mcp-endpoint"
 )
 
 // NetworkContextDescriptor is the link descriptor for PortTypeNetworkContext.
@@ -29,6 +37,13 @@ type NetworkContextDescriptor struct {
 // ExecEndpointDescriptor is the link descriptor for PortTypeExecEndpoint.
 type ExecEndpointDescriptor struct {
 	// Address of the provider's execution service, in gRPC target syntax
+	// (e.g. "unix:///run/interstellar/links/abc.sock").
+	Address string `json:"address"`
+}
+
+// MCPEndpointDescriptor is the link descriptor for PortTypeMCPEndpoint.
+type MCPEndpointDescriptor struct {
+	// Address of the provider's tool-proxy service, in gRPC target syntax
 	// (e.g. "unix:///run/interstellar/links/abc.sock").
 	Address string `json:"address"`
 }

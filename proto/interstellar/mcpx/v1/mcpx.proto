@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package interstellar.mcpx.v1;
+
+option go_package = "github.com/talhaHavadar/interstellar/gen/mcpx/v1;mcpxv1";
+
+// MCPProxyService is the protocol behind "mcp-endpoint" ports. A provider
+// wormhole (mcp-stdio, mcp-http, ...) holds a live session to an upstream
+// third-party MCP server and serves this normalized, minimal proxy on a local
+// unix socket for the life of a link. A purpose-built consumer wormhole dials
+// the socket from the link descriptor and fulfills its own hand-written tools
+// by calling specific upstream tools through here.
+//
+// This is interstellar's own narrow contract — deliberately NOT raw MCP — so
+// consumers never depend on MCP wire details, and the richer, riskier parts of
+// MCP (sampling, elicitation, resources, prompts, notifications) stay out of
+// the agent's reach. Only wormholes ever speak this protocol; agents cannot.
+service MCPProxyService {
+  // ListTools returns the upstream server's advertised tools. Useful for a
+  // consumer to validate at startup that the tools it wraps exist.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // CallTool invokes one upstream tool and returns its result.
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+}
+
+message ListToolsRequest {}
+
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+// ToolInfo is the upstream tool's identity as advertised by the MCP server.
+message ToolInfo {
+  string name = 1;
+  string description = 2;
+  // JSON Schema (the upstream server's input schema) as raw JSON.
+  string input_schema_json = 3;
+}
+
+message CallToolRequest {
+  // Name of the upstream tool to invoke.
+  string name = 1;
+  // JSON object of arguments, matching the upstream tool's input schema.
+  string arguments_json = 2;
+}
+
+message CallToolResponse {
+  // IsError reports a tool-level error (the upstream reported the call failed),
+  // as opposed to a transport error which surfaces as a gRPC error.
+  bool is_error = 1;
+  // ContentJson is the JSON-encoded array of upstream content blocks (text,
+  // etc.). Consumers decode what they need; a text-extraction helper is
+  // provided in the SDK.
+  string content_json = 2;
+  // StructuredJson is the upstream tool's structured output, if any, as raw
+  // JSON. Empty when the tool returned no structured content.
+  string structured_json = 3;
+}

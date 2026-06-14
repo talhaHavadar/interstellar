@@ -2,7 +2,7 @@ GOBIN := $(shell go env GOPATH)/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: all build wormholes run test gen lint clean
+.PHONY: all build wormholes run test gen gen-check lint clean
 
 all: build wormholes
 
@@ -12,7 +12,7 @@ build:
 # Each first-party wormhole builds to its own binary in bin/wormholes/.
 # Heavy-dependency wormholes (wireguard, tailscale) live in the separate
 # wormholes repo; build them there and drop the binaries into --wormhole-dir.
-WORMHOLES := echo local-exec ssh sysinfo uname
+WORMHOLES := echo local-exec ssh sysinfo uname mcp-stdio
 
 # Run the gateway over HTTP. Override CONFIG/LISTEN as needed, e.g.
 #   make run CONFIG=local.yaml LISTEN=127.0.0.1:8420
@@ -35,9 +35,21 @@ gen:
 	PATH="$(PATH):$(GOBIN)" buf lint
 	PATH="$(PATH):$(GOBIN)" buf generate
 
-lint:
+lint: gen-check
 	go vet ./...
 	PATH="$(PATH):$(GOBIN)" buf lint
+
+# Fail if the committed generated code is out of sync with proto/ (someone
+# edited a .proto without running `make gen`, or added a proto without
+# committing its generated output). Regenerates in place, then checks the tree.
+gen-check:
+	PATH="$(PATH):$(GOBIN)" buf generate
+	@if [ -n "$$(git status --porcelain -- gen/)" ]; then \
+		echo "ERROR: generated code is out of date or uncommitted."; \
+		echo "Run 'make gen' and commit the changes under gen/:"; \
+		git status --porcelain -- gen/; \
+		exit 1; \
+	fi
 
 clean:
 	rm -rf bin
