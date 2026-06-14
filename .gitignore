@@ -8,4 +8,4 @@ deploy/interstellar-mcp/.env
 deploy/interstellar-mcp/config.yaml
 deploy/interstellar-mcp/wormholes/
 interstellard
-
+mcp-stdio

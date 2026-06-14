@@ -1,0 +1,5 @@
+# Generated protobuf/gRPC code. It is committed (the module is imported by
+# external wormholes via `go get`, so it must build without the proto
+# toolchain), but marked generated so GitHub collapses it in diffs and excludes
+# it from language statistics. Regenerate with `make gen`; never hand-edit.
+gen/** linguist-generated=true
