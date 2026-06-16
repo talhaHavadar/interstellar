@@ -2,6 +2,7 @@
 *.jsonl
 *.snap
 *.comp
+/local.yaml
 
 # Secrets for the compose deployment — never commit these.
 deploy/interstellar-mcp/.env

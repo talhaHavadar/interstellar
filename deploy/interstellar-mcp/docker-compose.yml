@@ -17,6 +17,16 @@ services:
     volumes:
       - extra-wormholes:/out
     restart: "no"
+  install-contained-debdev:
+    image: ghcr.io/talhahavadar/wormhole-contained-debdev:latest
+    volumes:
+      - extra-wormholes:/out
+    restart: "no"
+  install-debian-packager:
+    image: ghcr.io/talhahavadar/wormhole-debian-packager:latest
+    volumes:
+      - extra-wormholes:/out
+    restart: "no"
   #
   # install-wireguard:
   #   image: ghcr.io/talhahavadar/wormhole-wireguard:latest
@@ -34,6 +44,10 @@ services:
     # binaries, so the gateway sees them on startup.
     depends_on:
       install-tailscale:
+        condition: service_completed_successfully
+      install-contained-debdev:
+        condition: service_completed_successfully
+      install-debian-packager:
         condition: service_completed_successfully
     #   install-wireguard:
     #     condition: service_completed_successfully
