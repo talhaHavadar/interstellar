@@ -169,7 +169,11 @@ message OpenLinkResponse {
     // First event on success: the link is live and carries its descriptor.
     LinkUp up = 1;
     LinkState state = 2;
+    // Log and Progress may stream before Up while the link is being brought
+    // up — e.g. a provider that reserves hardware over many minutes reports
+    // what it is waiting on instead of going silent.
     LogEvent log = 3;
+    ProgressEvent progress = 4;
   }
 }
 

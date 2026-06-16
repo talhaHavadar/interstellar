@@ -298,6 +298,9 @@ func (m *Manager) runLink(targetName string, stream grpc_OpenLinkClient, ready c
 			}
 		case *wormholev1.OpenLinkResponse_Log:
 			m.logger.Info("link log", "target", targetName, "level", e.Log.Level, "message", e.Log.Message)
+		case *wormholev1.OpenLinkResponse_Progress:
+			m.logger.Info("link progress", "target", targetName,
+				"fraction", e.Progress.Fraction, "message", e.Progress.Message)
 		}
 	}
 }

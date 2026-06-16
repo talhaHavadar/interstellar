@@ -901,6 +901,7 @@ type OpenLinkResponse struct {
 	//	*OpenLinkResponse_Up
 	//	*OpenLinkResponse_State
 	//	*OpenLinkResponse_Log
+	//	*OpenLinkResponse_Progress
 	Event         isOpenLinkResponse_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -970,6 +971,15 @@ func (x *OpenLinkResponse) GetLog() *LogEvent {
 	return nil
 }
 
+func (x *OpenLinkResponse) GetProgress() *ProgressEvent {
+	if x != nil {
+		if x, ok := x.Event.(*OpenLinkResponse_Progress); ok {
+			return x.Progress
+		}
+	}
+	return nil
+}
+
 type isOpenLinkResponse_Event interface {
 	isOpenLinkResponse_Event()
 }
@@ -984,7 +994,14 @@ type OpenLinkResponse_State struct {
 }
 
 type OpenLinkResponse_Log struct {
+	// Log and Progress may stream before Up while the link is being brought
+	// up — e.g. a provider that reserves hardware over many minutes reports
+	// what it is waiting on instead of going silent.
 	Log *LogEvent `protobuf:"bytes,3,opt,name=log,proto3,oneof"`
+}
+
+type OpenLinkResponse_Progress struct {
+	Progress *ProgressEvent `protobuf:"bytes,4,opt,name=progress,proto3,oneof"`
 }
 
 func (*OpenLinkResponse_Up) isOpenLinkResponse_Event() {}
@@ -992,6 +1009,8 @@ func (*OpenLinkResponse_Up) isOpenLinkResponse_Event() {}
 func (*OpenLinkResponse_State) isOpenLinkResponse_Event() {}
 
 func (*OpenLinkResponse_Log) isOpenLinkResponse_Event() {}
+
+func (*OpenLinkResponse_Progress) isOpenLinkResponse_Event() {}
 
 type LinkUp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1314,11 +1333,12 @@ const file_interstellar_wormhole_v1_wormhole_proto_rawDesc = "" +
 	"\tport_name\x18\x02 \x01(\tR\bportName\x12\x1f\n" +
 	"\vconfig_json\x18\x03 \x01(\tR\n" +
 	"configJson\x124\n" +
-	"\x05links\x18\x04 \x03(\v2\x1e.interstellar.wormhole.v1.LinkR\x05links\"\xc4\x01\n" +
+	"\x05links\x18\x04 \x03(\v2\x1e.interstellar.wormhole.v1.LinkR\x05links\"\x8b\x02\n" +
 	"\x10OpenLinkResponse\x122\n" +
 	"\x02up\x18\x01 \x01(\v2 .interstellar.wormhole.v1.LinkUpH\x00R\x02up\x12;\n" +
 	"\x05state\x18\x02 \x01(\v2#.interstellar.wormhole.v1.LinkStateH\x00R\x05state\x126\n" +
-	"\x03log\x18\x03 \x01(\v2\".interstellar.wormhole.v1.LogEventH\x00R\x03logB\a\n" +
+	"\x03log\x18\x03 \x01(\v2\".interstellar.wormhole.v1.LogEventH\x00R\x03log\x12E\n" +
+	"\bprogress\x18\x04 \x01(\v2'.interstellar.wormhole.v1.ProgressEventH\x00R\bprogressB\a\n" +
 	"\x05event\"<\n" +
 	"\x06LinkUp\x122\n" +
 	"\x04link\x18\x01 \x01(\v2\x1e.interstellar.wormhole.v1.LinkR\x04link\";\n" +
@@ -1397,22 +1417,23 @@ var file_interstellar_wormhole_v1_wormhole_proto_depIdxs = []int32{
 	14, // 10: interstellar.wormhole.v1.OpenLinkResponse.up:type_name -> interstellar.wormhole.v1.LinkUp
 	15, // 11: interstellar.wormhole.v1.OpenLinkResponse.state:type_name -> interstellar.wormhole.v1.LinkState
 	9,  // 12: interstellar.wormhole.v1.OpenLinkResponse.log:type_name -> interstellar.wormhole.v1.LogEvent
-	6,  // 13: interstellar.wormhole.v1.LinkUp.link:type_name -> interstellar.wormhole.v1.Link
-	1,  // 14: interstellar.wormhole.v1.WormholeService.Describe:input_type -> interstellar.wormhole.v1.DescribeRequest
-	7,  // 15: interstellar.wormhole.v1.WormholeService.CallTool:input_type -> interstellar.wormhole.v1.CallToolRequest
-	12, // 16: interstellar.wormhole.v1.WormholeService.OpenLink:input_type -> interstellar.wormhole.v1.OpenLinkRequest
-	16, // 17: interstellar.wormhole.v1.WormholeService.CloseLink:input_type -> interstellar.wormhole.v1.CloseLinkRequest
-	18, // 18: interstellar.wormhole.v1.WormholeService.Health:input_type -> interstellar.wormhole.v1.HealthRequest
-	2,  // 19: interstellar.wormhole.v1.WormholeService.Describe:output_type -> interstellar.wormhole.v1.DescribeResponse
-	8,  // 20: interstellar.wormhole.v1.WormholeService.CallTool:output_type -> interstellar.wormhole.v1.CallToolResponse
-	13, // 21: interstellar.wormhole.v1.WormholeService.OpenLink:output_type -> interstellar.wormhole.v1.OpenLinkResponse
-	17, // 22: interstellar.wormhole.v1.WormholeService.CloseLink:output_type -> interstellar.wormhole.v1.CloseLinkResponse
-	19, // 23: interstellar.wormhole.v1.WormholeService.Health:output_type -> interstellar.wormhole.v1.HealthResponse
-	19, // [19:24] is the sub-list for method output_type
-	14, // [14:19] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	10, // 13: interstellar.wormhole.v1.OpenLinkResponse.progress:type_name -> interstellar.wormhole.v1.ProgressEvent
+	6,  // 14: interstellar.wormhole.v1.LinkUp.link:type_name -> interstellar.wormhole.v1.Link
+	1,  // 15: interstellar.wormhole.v1.WormholeService.Describe:input_type -> interstellar.wormhole.v1.DescribeRequest
+	7,  // 16: interstellar.wormhole.v1.WormholeService.CallTool:input_type -> interstellar.wormhole.v1.CallToolRequest
+	12, // 17: interstellar.wormhole.v1.WormholeService.OpenLink:input_type -> interstellar.wormhole.v1.OpenLinkRequest
+	16, // 18: interstellar.wormhole.v1.WormholeService.CloseLink:input_type -> interstellar.wormhole.v1.CloseLinkRequest
+	18, // 19: interstellar.wormhole.v1.WormholeService.Health:input_type -> interstellar.wormhole.v1.HealthRequest
+	2,  // 20: interstellar.wormhole.v1.WormholeService.Describe:output_type -> interstellar.wormhole.v1.DescribeResponse
+	8,  // 21: interstellar.wormhole.v1.WormholeService.CallTool:output_type -> interstellar.wormhole.v1.CallToolResponse
+	13, // 22: interstellar.wormhole.v1.WormholeService.OpenLink:output_type -> interstellar.wormhole.v1.OpenLinkResponse
+	17, // 23: interstellar.wormhole.v1.WormholeService.CloseLink:output_type -> interstellar.wormhole.v1.CloseLinkResponse
+	19, // 24: interstellar.wormhole.v1.WormholeService.Health:output_type -> interstellar.wormhole.v1.HealthResponse
+	20, // [20:25] is the sub-list for method output_type
+	15, // [15:20] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_interstellar_wormhole_v1_wormhole_proto_init() }
@@ -1429,6 +1450,7 @@ func file_interstellar_wormhole_v1_wormhole_proto_init() {
 		(*OpenLinkResponse_Up)(nil),
 		(*OpenLinkResponse_State)(nil),
 		(*OpenLinkResponse_Log)(nil),
+		(*OpenLinkResponse_Progress)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
