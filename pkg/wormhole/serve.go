@@ -106,10 +106,20 @@ func (s *server) OpenLink(req *wormholev1.OpenLinkRequest, stream grpc.ServerStr
 		})
 	}
 
+	// Serialize all sends on this stream: a LinkHandler may stream log/progress
+	// (via LinkRequest.emit) from its own goroutines while we send Up/State.
+	var sendMu sync.Mutex
+	send := func(ev *wormholev1.OpenLinkResponse) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(ev)
+	}
+
 	active, err := h(stream.Context(), &LinkRequest{
 		LinkID: req.LinkId,
 		Config: json.RawMessage(req.ConfigJson),
 		Links:  upstream,
+		emit:   func(ev *wormholev1.OpenLinkResponse) { _ = send(ev) },
 	})
 	if err != nil {
 		return status.Errorf(codes.FailedPrecondition, "opening link: %v", err)
@@ -133,7 +143,7 @@ func (s *server) OpenLink(req *wormholev1.OpenLinkRequest, stream grpc.ServerStr
 	s.links[req.LinkId] = sl
 	s.mu.Unlock()
 
-	if err := stream.Send(&wormholev1.OpenLinkResponse{
+	if err := send(&wormholev1.OpenLinkResponse{
 		Event: &wormholev1.OpenLinkResponse_Up{
 			Up: &wormholev1.LinkUp{Link: &wormholev1.Link{
 				LinkId:         req.LinkId,
@@ -154,7 +164,7 @@ func (s *server) OpenLink(req *wormholev1.OpenLinkRequest, stream grpc.ServerStr
 	case <-stream.Context().Done():
 		s.teardown(req.LinkId)
 	}
-	_ = stream.Send(&wormholev1.OpenLinkResponse{
+	_ = send(&wormholev1.OpenLinkResponse{
 		Event: &wormholev1.OpenLinkResponse_State{
 			State: &wormholev1.LinkState{State: "closed"},
 		},

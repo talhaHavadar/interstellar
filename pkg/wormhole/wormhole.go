@@ -204,6 +204,37 @@ type LinkRequest struct {
 	Config json.RawMessage
 	// Links are upstream links this link should be established through.
 	Links []Link
+
+	emit func(*wormholev1.OpenLinkResponse) // nil-safe; serialized by the server
+}
+
+// Logf streams a log line on the OpenLink stream while the link is being
+// brought up. Level is "debug", "info", "warn" or "error". Use it from a
+// LinkHandler that does slow work (reserving hardware, dialing a tunnel) so
+// the bring-up reports what it is doing instead of going silent. It is a
+// no-op once the handler returns and the link is up.
+func (r *LinkRequest) Logf(level, format string, args ...any) {
+	if r.emit == nil {
+		return
+	}
+	r.emit(&wormholev1.OpenLinkResponse{
+		Event: &wormholev1.OpenLinkResponse_Log{
+			Log: &wormholev1.LogEvent{Level: level, Message: fmt.Sprintf(format, args...)},
+		},
+	})
+}
+
+// Progress streams a progress update during link bring-up. Fraction is in
+// [0,1], or -1 when indeterminate.
+func (r *LinkRequest) Progress(fraction float64, message string) {
+	if r.emit == nil {
+		return
+	}
+	r.emit(&wormholev1.OpenLinkResponse{
+		Event: &wormholev1.OpenLinkResponse_Progress{
+			Progress: &wormholev1.ProgressEvent{Fraction: fraction, Message: message},
+		},
+	})
 }
 
 // ActiveLink is a live link on a provided port.
