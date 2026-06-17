@@ -217,6 +217,8 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		callID := newCallID()
 		start := time.Now()
+		progressToken := req.Params.GetProgressToken()
+		var progressSeq float64
 
 		record := audit.Record{
 			Time: start, CallID: callID,
@@ -333,6 +335,18 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 				logger.Debug("wormhole progress",
 					"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
 					"fraction", e.Progress.Fraction, "message", e.Progress.Message)
+				// Relay to the MCP client when it asked to be notified. The
+				// spec says clients reset their per-call timeout on each
+				// progress notification, so this is what keeps long-running
+				// tools (like a 45-min testflinger reservation) alive.
+				if progressToken != nil {
+					progressSeq++
+					_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+						ProgressToken: progressToken,
+						Progress:      progressSeq,
+						Message:       e.Progress.Message,
+					})
+				}
 			case *wormholev1.CallToolResponse_Result:
 				result = e.Result
 			}
