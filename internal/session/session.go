@@ -30,7 +30,33 @@ const (
 	defaultOpenTimeout = 90 * time.Second
 	defaultIdleTimeout = 60 * time.Second
 	closeTimeout       = 10 * time.Second
+	// heartbeatInterval re-fires the last-known progress event to all
+	// subscribers while the link is still coming up, so clients waiting on
+	// long bring-ups (a testflinger reservation can be ~45 min) keep
+	// resetting their per-call timeouts even when the wormhole goes silent.
+	heartbeatInterval = 30 * time.Second
 )
+
+// ProgressFunc receives progress updates while a link is being brought up.
+// Fraction is in [0,1], or -1 when unknown. Implementations must not block.
+type ProgressFunc func(fraction float64, message string)
+
+// AcquireOption configures a single Acquire call.
+type AcquireOption func(*acquireOpts)
+
+type acquireOpts struct {
+	onProgress ProgressFunc
+}
+
+// WithProgress subscribes a callback to bring-up progress for the acquired
+// link (and any upstream `via` links, with their target name prefixed). The
+// subscription ends when Acquire returns. The first acquirer of a link sees
+// every event; later acquirers that join a bring-up in flight are also
+// fired-once with the last-known progress so they don't sit silent until the
+// next event.
+func WithProgress(fn ProgressFunc) AcquireOption {
+	return func(o *acquireOpts) { o.onProgress = fn }
+}
 
 // Target is a resolved, validated endpoint: a wormhole's provided port plus
 // the configuration and upstream routing needed to bring it up.
@@ -77,6 +103,54 @@ type linkState struct {
 	upstream []*Lease           // leases held on `via` targets
 	timer    *time.Timer        // idle teardown timer; nil when refs > 0
 	dead     bool               // link failed or was torn down
+
+	// Bring-up progress fan-out. progressSubs is the live set of waiters;
+	// runLink (and the heartbeat) fire each registered callback for every
+	// OpenLinkResponse_Progress event. lastProgress remembers the most
+	// recent event so a late joiner can be primed immediately. up flips true
+	// once the link is up, after which no more progress is fired and new
+	// acquirers skip the subscription dance entirely.
+	progressSubs map[uint64]ProgressFunc
+	nextSubID    uint64
+	lastProgress *progressEvent
+	up           bool
+}
+
+type progressEvent struct {
+	fraction float64
+	message  string
+}
+
+// addSub registers a progress subscriber. Caller must hold m.mu.
+func (ls *linkState) addSub(fn ProgressFunc) uint64 {
+	if ls.progressSubs == nil {
+		ls.progressSubs = map[uint64]ProgressFunc{}
+	}
+	ls.nextSubID++
+	id := ls.nextSubID
+	ls.progressSubs[id] = fn
+	return id
+}
+
+// removeSub unregisters a subscriber. Caller must hold m.mu. Safe with id=0.
+func (ls *linkState) removeSub(id uint64) {
+	if id == 0 {
+		return
+	}
+	delete(ls.progressSubs, id)
+}
+
+// snapshotSubs returns a copy of the current subscribers so callbacks can be
+// fired outside the lock. Caller must hold m.mu.
+func (ls *linkState) snapshotSubs() []ProgressFunc {
+	if len(ls.progressSubs) == 0 {
+		return nil
+	}
+	out := make([]ProgressFunc, 0, len(ls.progressSubs))
+	for _, fn := range ls.progressSubs {
+		out = append(out, fn)
+	}
+	return out
 }
 
 // Lease is a hold on a live link. Release it when the work is done; the link
@@ -124,8 +198,15 @@ func (m *Manager) IsLive(targetName string) bool {
 }
 
 // Acquire brings up (or reuses) the named target's link and returns a lease.
-// Concurrent acquisitions of the same target share one link.
-func (m *Manager) Acquire(ctx context.Context, targetName string) (*Lease, error) {
+// Concurrent acquisitions of the same target share one link. Pass
+// WithProgress to receive bring-up progress events; the subscription ends
+// when Acquire returns.
+func (m *Manager) Acquire(ctx context.Context, targetName string, opts ...AcquireOption) (*Lease, error) {
+	var ao acquireOpts
+	for _, opt := range opts {
+		opt(&ao)
+	}
+
 	for {
 		m.mu.Lock()
 		ls, ok := m.links[targetName]
@@ -137,12 +218,21 @@ func (m *Manager) Acquire(ctx context.Context, targetName string) (*Lease, error
 			}
 			ls = &linkState{target: target, ready: make(chan struct{}), refs: 1}
 			m.links[targetName] = ls
+			var subID uint64
+			if ao.onProgress != nil {
+				subID = ls.addSub(ao.onProgress)
+			}
 			m.mu.Unlock()
 
-			m.setup(ctx, ls)
+			m.setup(ctx, ls, ao.onProgress)
 			<-ls.ready
-			if ls.err != nil {
-				return nil, ls.err
+
+			m.mu.Lock()
+			ls.removeSub(subID)
+			err := ls.err
+			m.mu.Unlock()
+			if err != nil {
+				return nil, err
 			}
 			return &Lease{Link: ls.link, mgr: m, target: targetName}, nil
 		}
@@ -159,11 +249,28 @@ func (m *Manager) Acquire(ctx context.Context, targetName string) (*Lease, error
 			ls.timer.Stop()
 			ls.timer = nil
 		}
+		// If the link is still coming up, join the fan-out and grab the
+		// last-known progress so the caller's client sees activity
+		// immediately instead of sitting silent until the next event.
+		var subID uint64
+		var primer *progressEvent
+		if ao.onProgress != nil && !ls.up {
+			subID = ls.addSub(ao.onProgress)
+			if ls.lastProgress != nil {
+				ev := *ls.lastProgress
+				primer = &ev
+			}
+		}
 		ready := ls.ready
 		m.mu.Unlock()
 
+		if primer != nil {
+			ao.onProgress(primer.fraction, primer.message)
+		}
+
 		<-ready
 		m.mu.Lock()
+		ls.removeSub(subID)
 		err := ls.err
 		link := ls.link
 		dead := ls.dead
@@ -182,8 +289,10 @@ func (m *Manager) Acquire(ctx context.Context, targetName string) (*Lease, error
 
 // setup establishes the link for ls and closes ls.ready. On failure it marks
 // the state dead so Acquire reports the error and the entry is dropped.
-func (m *Manager) setup(ctx context.Context, ls *linkState) {
-	link, cancel, upstream, err := m.open(ctx, ls.target)
+// onProgress, if non-nil, is forwarded to upstream `via` Acquire calls so
+// the original caller sees their bring-up too (prefixed with target name).
+func (m *Manager) setup(ctx context.Context, ls *linkState, onProgress ProgressFunc) {
+	link, cancel, upstream, err := m.open(ctx, ls.target, onProgress)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -201,7 +310,7 @@ func (m *Manager) setup(ctx context.Context, ls *linkState) {
 
 // open brings a target's link up: it acquires upstream `via` leases, calls
 // OpenLink on the providing wormhole, and waits for the link to come up.
-func (m *Manager) open(ctx context.Context, target Target) (*wormholev1.Link, context.CancelFunc, []*Lease, error) {
+func (m *Manager) open(ctx context.Context, target Target, onProgress ProgressFunc) (*wormholev1.Link, context.CancelFunc, []*Lease, error) {
 	wh, ok := m.reg.Get(target.Wormhole)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("target %q: wormhole %q is not loaded", target.Name, target.Wormhole)
@@ -215,7 +324,11 @@ func (m *Manager) open(ctx context.Context, target Target) (*wormholev1.Link, co
 		}
 	}
 	for reqPort, upTarget := range target.Via {
-		lease, err := m.Acquire(ctx, upTarget)
+		var upOpts []AcquireOption
+		if onProgress != nil {
+			upOpts = append(upOpts, WithProgress(prefixProgress(onProgress, upTarget)))
+		}
+		lease, err := m.Acquire(ctx, upTarget, upOpts...)
 		if err != nil {
 			release()
 			return nil, nil, nil, fmt.Errorf("target %q via %q: %w", target.Name, upTarget, err)
@@ -276,8 +389,18 @@ type openResult struct {
 }
 
 // runLink reads the OpenLink stream: it reports the first LinkUp via ready,
-// then watches for the link closing or the stream ending.
+// then watches for the link closing or the stream ending. While the link is
+// still coming up it fans every progress event out to subscribers and runs a
+// heartbeat that re-fires the last event so silent wormholes (e.g. a
+// testflinger reservation waiting on a real machine) don't let waiting MCP
+// clients hit their per-call timeout.
 func (m *Manager) runLink(targetName string, stream grpc_OpenLinkClient, ready chan<- openResult) {
+	stopHeartbeat := make(chan struct{})
+	var heartbeatOnce sync.Once
+	stop := func() { heartbeatOnce.Do(func() { close(stopHeartbeat) }) }
+	defer stop()
+	go m.heartbeat(targetName, stopHeartbeat)
+
 	up := false
 	for {
 		ev, err := stream.Recv()
@@ -292,6 +415,8 @@ func (m *Manager) runLink(targetName string, stream grpc_OpenLinkClient, ready c
 		switch e := ev.Event.(type) {
 		case *wormholev1.OpenLinkResponse_Up:
 			up = true
+			stop()
+			m.markLinkUp(targetName)
 			ready <- openResult{link: e.Up.Link}
 		case *wormholev1.OpenLinkResponse_State:
 			if e.State.State == "closed" {
@@ -305,7 +430,83 @@ func (m *Manager) runLink(targetName string, stream grpc_OpenLinkClient, ready c
 		case *wormholev1.OpenLinkResponse_Progress:
 			m.logger.Info("link progress", "target", targetName,
 				"fraction", e.Progress.Fraction, "message", e.Progress.Message)
+			if !up {
+				m.fanoutProgress(targetName, e.Progress.Fraction, e.Progress.Message)
+			}
 		}
+	}
+}
+
+// fanoutProgress records the event as last-known and fires every current
+// subscriber outside the lock. Safe to call concurrently.
+func (m *Manager) fanoutProgress(targetName string, fraction float64, message string) {
+	m.mu.Lock()
+	ls, ok := m.links[targetName]
+	if !ok || ls.up {
+		m.mu.Unlock()
+		return
+	}
+	ls.lastProgress = &progressEvent{fraction: fraction, message: message}
+	subs := ls.snapshotSubs()
+	m.mu.Unlock()
+	for _, fn := range subs {
+		fn(fraction, message)
+	}
+}
+
+// markLinkUp flips ls.up so no further progress is fired and frees the subs
+// map for GC. Subscribers exit naturally when their Acquire returns.
+func (m *Manager) markLinkUp(targetName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ls, ok := m.links[targetName]; ok {
+		ls.up = true
+		ls.progressSubs = nil
+	}
+}
+
+// heartbeat re-fires the last-known progress event every heartbeatInterval
+// until stop is closed, so subscribers' MCP clients keep resetting their
+// per-call timeouts even when the wormhole stops emitting events. If no
+// progress has been seen yet, sends a generic "waiting" tick so the client
+// still has something to reset on.
+func (m *Manager) heartbeat(targetName string, stop <-chan struct{}) {
+	t := time.NewTicker(heartbeatInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			m.mu.Lock()
+			ls, ok := m.links[targetName]
+			if !ok || ls.up {
+				m.mu.Unlock()
+				return
+			}
+			subs := ls.snapshotSubs()
+			var ev progressEvent
+			if ls.lastProgress != nil {
+				ev = *ls.lastProgress
+			} else {
+				ev = progressEvent{fraction: -1, message: fmt.Sprintf("still bringing up %s", targetName)}
+			}
+			m.mu.Unlock()
+			for _, fn := range subs {
+				fn(ev.fraction, ev.message)
+			}
+		}
+	}
+}
+
+// prefixProgress wraps a ProgressFunc to tag every message with a target
+// name, so the caller can tell which link in a `via` chain is reporting.
+func prefixProgress(fn ProgressFunc, target string) ProgressFunc {
+	if fn == nil {
+		return nil
+	}
+	return func(fraction float64, message string) {
+		fn(fraction, fmt.Sprintf("[%s] %s", target, message))
 	}
 }
 

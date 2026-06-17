@@ -222,6 +222,21 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 		start := time.Now()
 		progressToken := req.Params.GetProgressToken()
 		var progressSeq float64
+		// notifyProgress relays one event up to the MCP client. The spec says
+		// clients reset their per-call timeout on each progress notification,
+		// so this is what keeps long-running phases — link bring-up (e.g. a
+		// 45-min testflinger reservation) and the tool call itself — alive.
+		notifyProgress := func(message string) {
+			if progressToken == nil {
+				return
+			}
+			progressSeq++
+			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+				ProgressToken: progressToken,
+				Progress:      progressSeq,
+				Message:       message,
+			})
+		}
 
 		record := audit.Record{
 			Time: start, CallID: callID,
@@ -285,7 +300,10 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 				releaseAll()
 				return finish(toolError(fmt.Sprintf("unknown target %q for %q; choose one of %v", targetName, p.argName, p.targets)), nil)
 			}
-			lease, err := sess.Acquire(ctx, targetName)
+			lease, err := sess.Acquire(ctx, targetName,
+				session.WithProgress(func(_ float64, message string) {
+					notifyProgress(message)
+				}))
 			if err != nil {
 				releaseAll()
 				return finish(toolError(fmt.Sprintf("connecting target %q: %v", targetName, err)), nil)
@@ -338,18 +356,7 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 				logger.Debug("wormhole progress",
 					"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
 					"fraction", e.Progress.Fraction, "message", e.Progress.Message)
-				// Relay to the MCP client when it asked to be notified. The
-				// spec says clients reset their per-call timeout on each
-				// progress notification, so this is what keeps long-running
-				// tools (like a 45-min testflinger reservation) alive.
-				if progressToken != nil {
-					progressSeq++
-					_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
-						ProgressToken: progressToken,
-						Progress:      progressSeq,
-						Message:       e.Progress.Message,
-					})
-				}
+				notifyProgress(e.Progress.Message)
 			case *wormholev1.CallToolResponse_Result:
 				result = e.Result
 			}
