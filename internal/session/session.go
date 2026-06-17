@@ -43,6 +43,10 @@ type Target struct {
 	IdleTimeout time.Duration
 	// OpenTimeout overrides defaultOpenTimeout for bringing this link up.
 	OpenTimeout time.Duration
+	// Hidden suppresses the target from MCP-agent-facing surfaces (tool
+	// target enums and interstellar__status). The session manager still
+	// resolves it normally for `via:` routing.
+	Hidden bool
 }
 
 // Registry is the slice of the wormhole registry the session manager needs:

@@ -50,12 +50,23 @@ type Target struct {
 	// OpenTimeout bounds how long bringing this link up may take. Zero uses
 	// the server default (generous, to allow for slow tunnels).
 	OpenTimeout time.Duration `yaml:"open_timeout"`
+	// Visible controls whether AI agents see this target when listing
+	// candidates for a tool's required port and in interstellar__status.
+	// Defaults to true. Set to false to hide pure routing facilitators
+	// (jump hosts, transport tunnels) — they remain fully usable as `via:`
+	// upstreams for other targets.
+	Visible *bool `yaml:"visible"`
 }
+
+// IsVisible reports whether the target should be exposed to MCP agents.
+// Targets default to visible; setting `visible: false` in the config hides
+// them from tool target enums and from interstellar__status.
+func (t Target) IsVisible() bool { return t.Visible == nil || *t.Visible }
 
 // reservedConfigKeys are target-level field names that must not appear inside
 // a target's `config:` block. Catching them turns a silent misindentation
 // (e.g. `via` nested under `config`) into a clear startup error.
-var reservedConfigKeys = []string{"via", "wormhole", "port", "idle_timeout", "open_timeout"}
+var reservedConfigKeys = []string{"via", "wormhole", "port", "idle_timeout", "open_timeout", "visible"}
 
 // Validate checks the configuration for structural mistakes that YAML itself
 // won't catch — chiefly target-level keys accidentally nested under config.

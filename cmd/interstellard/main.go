@@ -167,6 +167,7 @@ func buildTargets(cfg *config.Config) (map[string]session.Target, error) {
 			Via:         t.Via,
 			IdleTimeout: t.IdleTimeout,
 			OpenTimeout: t.OpenTimeout,
+			Hidden:      !t.IsVisible(),
 		}
 	}
 	return targets, nil

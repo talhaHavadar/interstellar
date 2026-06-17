@@ -74,6 +74,9 @@ func buildStatus(version string, reg *registry.Registry, pol *policy.Engine, ses
 
 	if sess != nil {
 		for name, t := range sess.Targets() {
+			if t.Hidden {
+				continue
+			}
 			ts := targetStatus{Name: name, Wormhole: t.Wormhole, Port: t.Port, Via: t.Via, Live: sess.IsLive(name)}
 			if wh, ok := reg.Get(t.Wormhole); ok {
 				if p := findPort(wh.Manifest.Provides, t.Port); p != nil {

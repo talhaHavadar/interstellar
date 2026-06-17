@@ -96,6 +96,9 @@ func targetsByType(reg *registry.Registry, sess *session.Manager) map[string][]s
 		return byType
 	}
 	for name, t := range sess.Targets() {
+		if t.Hidden {
+			continue
+		}
 		wh, ok := reg.Get(t.Wormhole)
 		if !ok {
 			continue
