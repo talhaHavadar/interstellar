@@ -63,6 +63,12 @@ type ExecResult struct {
 // Run executes cmd and collects its output. A non-zero exit code is returned
 // in the result, not as an error; err is non-nil only when the command could
 // not be run to completion.
+//
+// Run buffers the full stdout/stderr in memory before returning. For long
+// commands or large outputs prefer RunStream — it forwards each chunk to a
+// sink as it arrives, so a wormhole that re-emits to a downstream consumer
+// does not accumulate the whole output and does not then flush it as a
+// single oversized gRPC message at the end.
 func (r *ExecRunner) Run(ctx context.Context, cmd Command) (*ExecResult, error) {
 	stream, err := r.client.Run(ctx, &execv1.RunRequest{
 		Argv:      cmd.Argv,
@@ -92,6 +98,53 @@ func (r *ExecRunner) Run(ctx context.Context, cmd Command) (*ExecResult, error) 
 			res.ExitCode = int(e.Exit.Code)
 			if e.Exit.Error != "" {
 				return res, fmt.Errorf("command failed: %s", e.Exit.Error)
+			}
+		}
+	}
+}
+
+// RunStream executes cmd and forwards each stdout/stderr chunk and the exit
+// code to sink as they arrive, without buffering the whole output in memory.
+// This is the right API for a wormhole that wraps an upstream exec endpoint
+// and re-emits to its own consumers (e.g. contained-debdev, testflinger).
+// Run's all-at-end flush would produce a single sink.Stdout call carrying
+// the entire output, which crosses gRPC's default 4 MiB MaxRecvMsgSize and
+// fails the downstream Recv with ResourceExhausted as soon as the command's
+// total output exceeds that ceiling.
+//
+// RunStream returns nil after the stream's EOF. A stream-level transport
+// error returns it directly. An Exit event carrying a non-empty Error field
+// is reported as a wrapped error AFTER its exit code has been pushed to the
+// sink — callers can rely on sink.SetExit having been called when this path
+// returns an error.
+func (r *ExecRunner) RunStream(ctx context.Context, cmd Command, sink ExecSink) error {
+	stream, err := r.client.Run(ctx, &execv1.RunRequest{
+		Argv:      cmd.Argv,
+		Env:       cmd.Env,
+		Dir:       cmd.Dir,
+		Stdin:     cmd.Stdin,
+		TimeoutMs: cmd.TimeoutMs,
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		ev, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch e := ev.Event.(type) {
+		case *execv1.RunResponse_Stdout:
+			sink.Stdout(e.Stdout)
+		case *execv1.RunResponse_Stderr:
+			sink.Stderr(e.Stderr)
+		case *execv1.RunResponse_Exit:
+			sink.SetExit(int(e.Exit.Code))
+			if e.Exit.Error != "" {
+				return fmt.Errorf("command failed: %s", e.Exit.Error)
 			}
 		}
 	}
