@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -86,7 +87,15 @@ func (s *server) CallTool(req *wormholev1.CallToolRequest, stream grpc.ServerStr
 			result.ContentJson = string(content)
 		}
 	}
+	// Diagnostic: bracket the final Result send with direct-stderr logs so we
+	// can tell whether the plugin gRPC hop dropped the payload, independent of
+	// the stream we're using to deliver it. Includes ContentJson size to spot
+	// oversize payloads. Kept temporarily while investigating client-side hangs.
+	fmt.Fprintf(os.Stderr, "wormhole %q tool %q call %s: sending Result (content_bytes=%d is_error=%t)\n",
+		s.w.name, req.Tool, req.CallId, len(result.ContentJson), result.IsError)
 	send(&wormholev1.CallToolResponse{Event: &wormholev1.CallToolResponse_Result{Result: result}})
+	fmt.Fprintf(os.Stderr, "wormhole %q tool %q call %s: sent Result\n",
+		s.w.name, req.Tool, req.CallId)
 	return nil
 }
 

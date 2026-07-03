@@ -22,6 +22,15 @@ type Config struct {
 	WormholeDir string `yaml:"wormhole_dir"`
 	// AuditLog is the JSONL file every tool call is appended to.
 	AuditLog string `yaml:"audit_log"`
+	// MCPKeepAlive is the interval between server-initiated MCP ping requests
+	// on each open session. Real bytes on the SSE stream keep client-side
+	// idle read timeouts from firing during long-running tool calls (e.g. a
+	// 10-minute Debian package review) that would otherwise leave the stream
+	// silent — clients don't get progress notifications unless they opt in
+	// with a progressToken, so the server-side ping is what actually
+	// guarantees liveness on the wire. Zero disables pings; a client that
+	// doesn't respond to a ping has its session force-closed by the go-sdk.
+	MCPKeepAlive time.Duration `yaml:"mcp_keepalive"`
 	// Targets are admin-defined endpoints a tool can be pointed at: each
 	// binds a wormhole's provided port to a configuration, optionally
 	// routed through other targets. Keyed by target name.
@@ -85,9 +94,10 @@ func (c *Config) Validate() error {
 // Default returns the configuration used when no file is given.
 func Default() *Config {
 	return &Config{
-		Listen:   "127.0.0.1:8420",
-		AuditLog: "interstellar-audit.jsonl",
-		Targets:  map[string]Target{},
+		Listen:       "127.0.0.1:8420",
+		AuditLog:     "interstellar-audit.jsonl",
+		MCPKeepAlive: 30 * time.Second,
+		Targets:      map[string]Target{},
 	}
 }
 

@@ -38,11 +38,12 @@ func main() {
 func run() error {
 	var wormholeDirs []string
 	var (
-		configPath  = flag.String("config", "", "path to YAML config file")
-		listen      = flag.String("listen", "", "HTTP listen address for the MCP endpoint (overrides config)")
-		stdio       = flag.Bool("stdio", false, "serve MCP over stdio instead of HTTP (for local agents)")
-		auditPath   = flag.String("audit-log", "", "path of the JSONL audit log (overrides config)")
-		showVersion = flag.Bool("version", false, "print version and exit")
+		configPath   = flag.String("config", "", "path to YAML config file")
+		listen       = flag.String("listen", "", "HTTP listen address for the MCP endpoint (overrides config)")
+		stdio        = flag.Bool("stdio", false, "serve MCP over stdio instead of HTTP (for local agents)")
+		auditPath    = flag.String("audit-log", "", "path of the JSONL audit log (overrides config)")
+		mcpKeepAlive = flag.Duration("mcp-keepalive", 0, "interval between MCP session pings (0 = use config; disable with a negative value)")
+		showVersion  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Func("wormhole-dir", "directory of wormhole plugin executables; repeat to load from several (overrides config)",
 		func(dir string) error {
@@ -69,6 +70,13 @@ func run() error {
 	}
 	if *auditPath != "" {
 		cfg.AuditLog = *auditPath
+	}
+	// A negative flag value ("--mcp-keepalive=-1s") is the explicit way to
+	// disable pings; a zero value leaves the config default in place.
+	if *mcpKeepAlive < 0 {
+		cfg.MCPKeepAlive = 0
+	} else if *mcpKeepAlive > 0 {
+		cfg.MCPKeepAlive = *mcpKeepAlive
 	}
 
 	// Effective wormhole directories: the repeatable flag wins; otherwise the
@@ -116,7 +124,9 @@ func run() error {
 	sess := session.New(reg, logger, targets)
 	defer sess.Close()
 
-	server := mcpserver.New(version, reg, pol, sess, aud, logger)
+	server := mcpserver.New(version, reg, pol, sess, aud, logger, mcpserver.Options{
+		KeepAlive: cfg.MCPKeepAlive,
+	})
 
 	if *stdio {
 		logger.Info("serving MCP over stdio", "version", version)

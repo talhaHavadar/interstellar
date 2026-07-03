@@ -35,16 +35,29 @@ type portArg struct {
 	targets  []string // compatible target names
 }
 
+// Options tunes the MCP server we build. Zero values fall back to sensible
+// defaults.
+type Options struct {
+	// KeepAlive is the interval between server-initiated MCP pings on each
+	// open session. Non-zero enables the go-sdk keepalive; the pings put real
+	// bytes on the SSE stream so that clients with short idle read timeouts
+	// (e.g. hermes-agent's 300 s httpx read) don't drop the connection during
+	// long-running tool calls that produce no client-visible progress.
+	KeepAlive time.Duration
+}
+
 // New builds the MCP server over the loaded wormholes. Tools are hidden when
 // policy denies them or when a non-optional required port has no compatible
 // target; either way the omission and its reason show up in
 // interstellar__status.
-func New(version string, reg *registry.Registry, pol *policy.Engine, sess *session.Manager, aud *audit.Log, logger *slog.Logger) *mcp.Server {
+func New(version string, reg *registry.Registry, pol *policy.Engine, sess *session.Manager, aud *audit.Log, logger *slog.Logger, opts Options) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "interstellar",
 		Title:   "Interstellar",
 		Version: version,
-	}, nil)
+	}, &mcp.ServerOptions{
+		KeepAlive: opts.KeepAlive,
+	})
 
 	byType := targetsByType(reg, sess)
 
@@ -359,9 +372,18 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 				notifyProgress(e.Progress.Message)
 			case *wormholev1.CallToolResponse_Result:
 				result = e.Result
+				// Diagnostic: paired with the wormhole-side "sent Result" log,
+				// this pins the plugin gRPC hop. If we see this line but hermes
+				// still hangs, the leak is north of the core.
+				logger.Info("wormhole result received",
+					"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
+					"content_bytes", len(result.ContentJson), "is_error", result.IsError)
 			}
 		}
 
+		logger.Info("returning tool result to mcp client",
+			"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
+			"content_bytes", len(result.ContentJson))
 		return finish(&mcp.CallToolResult{
 			IsError: result.IsError,
 			Content: []mcp.Content{&mcp.TextContent{Text: result.ContentJson}},
