@@ -233,19 +233,32 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		callID := newCallID()
 		start := time.Now()
-		progressToken := req.Params.GetProgressToken()
+		// Use the client-supplied progressToken when present; otherwise
+		// synthesise one from the callID. The synthetic case matters for
+		// clients (hermes-agent as of 2026-07) that don't pass a
+		// progressToken: without a token we used to drop every progress
+		// event on the floor, leaving the tool-call POST's SSE response
+		// stream silent for the entire tool run. Any client-side per-
+		// response idle timer (hermes hardcodes httpx read=300s on that
+		// stream in tools/mcp_tool.py) then fires mid-review even though
+		// the wormhole is happily progressing. Sending progress events
+		// against a token the client never asked for is harmless — MCP
+		// clients ignore unfamiliar notifications — but the bytes on the
+		// wire keep the read timer resetting so the eventual result event
+		// makes it through.
+		effectiveToken := req.Params.GetProgressToken()
+		if effectiveToken == nil {
+			effectiveToken = "interstellar-call-" + callID
+		}
 		var progressSeq float64
-		// notifyProgress relays one event up to the MCP client. The spec says
-		// clients reset their per-call timeout on each progress notification,
-		// so this is what keeps long-running phases — link bring-up (e.g. a
-		// 45-min testflinger reservation) and the tool call itself — alive.
+		// notifyProgress relays one event up to the MCP client. It also
+		// serves as our SSE-keepalive on the tool-call response stream:
+		// the go-sdk's server-side KeepAlive puts pings on the standalone
+		// SSE stream, not on this per-request stream, so we do it here.
 		notifyProgress := func(message string) {
-			if progressToken == nil {
-				return
-			}
 			progressSeq++
 			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
-				ProgressToken: progressToken,
+				ProgressToken: effectiveToken,
 				Progress:      progressSeq,
 				Message:       message,
 			})
@@ -365,6 +378,12 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 				logger.Info("wormhole log",
 					"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
 					"level", e.Log.Level, "message", e.Log.Message)
+				// Also relay as progress: puts bytes on the tool-call SSE
+				// stream so a client with a short per-response idle timer
+				// stays healthy even when the wormhole is silent between
+				// heartbeat ticks. Cheap; hermes-style clients that ignore
+				// unsolicited progress notifications just drop these.
+				notifyProgress(fmt.Sprintf("[%s] %s", e.Log.Level, e.Log.Message))
 			case *wormholev1.CallToolResponse_Progress:
 				logger.Debug("wormhole progress",
 					"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
