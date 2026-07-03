@@ -103,6 +103,86 @@ func TestOpenLinkStreamsBeforeUp(t *testing.T) {
 	}
 }
 
+// TestOpenLinkDiedChannelTearsDown asserts that closing ActiveLink.Died from
+// the plugin ends the OpenLink stream, invokes ActiveLink.Close, and reports
+// state=closed — the recovery path for a live link whose underlying resource
+// has failed (e.g. an expired testflinger reservation, a dropped ssh tunnel).
+func TestOpenLinkDiedChannelTearsDown(t *testing.T) {
+	w := New("dier", "0.1.0", "")
+	died := make(chan struct{})
+	closed := make(chan struct{})
+	w.Provide(
+		Port{Name: "target", Type: PortTypeExecEndpoint, Description: "x"},
+		func(ctx context.Context, req *LinkRequest) (*ActiveLink, error) {
+			return &ActiveLink{
+				Descriptor: ExecEndpointDescriptor{Address: "unix:///tmp/x.sock"},
+				Died:       died,
+				Close: func() error {
+					close(closed)
+					return nil
+				},
+			}, nil
+		},
+	)
+
+	s := newServer(w)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &fakeOpenLinkStream{ctx: ctx}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.OpenLink(&wormholev1.OpenLinkRequest{LinkId: "L1", PortName: "target"}, stream)
+	}()
+
+	// Wait for LinkUp before signaling death so we exercise the post-Up path.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for LinkUp")
+		}
+		up := false
+		for _, ev := range stream.snapshot() {
+			if _, ok := ev.Event.(*wormholev1.OpenLinkResponse_Up); ok {
+				up = true
+				break
+			}
+		}
+		if up {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	close(died)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("OpenLink returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OpenLink did not return after Died was closed")
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("ActiveLink.Close was not invoked on death")
+	}
+
+	var sawClosed bool
+	for _, ev := range stream.snapshot() {
+		if st, ok := ev.Event.(*wormholev1.OpenLinkResponse_State); ok && st.State.State == "closed" {
+			sawClosed = true
+			break
+		}
+	}
+	if !sawClosed {
+		t.Fatal("expected state=closed event after Died fired")
+	}
+}
+
 // TestLinkRequestEmitNilSafe ensures the streaming helpers are no-ops when the
 // server has not wired an emit (e.g. a handler invoked outside a live stream).
 func TestLinkRequestEmitNilSafe(t *testing.T) {

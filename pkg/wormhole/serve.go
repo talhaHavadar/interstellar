@@ -158,9 +158,16 @@ func (s *server) OpenLink(req *wormholev1.OpenLinkRequest, stream grpc.ServerStr
 	}
 
 	// The stream stays open for the life of the link: it ends when the core
-	// calls CloseLink, or when the core disappears (stream context done).
+	// calls CloseLink, when the wormhole plugin signals its link died, or
+	// when the core disappears (stream context done).
+	died := active.Died
+	if died == nil {
+		died = make(chan struct{}) // never fires; keeps the select simple
+	}
 	select {
 	case <-sl.done:
+	case <-died:
+		s.teardown(req.LinkId)
 	case <-stream.Context().Done():
 		s.teardown(req.LinkId)
 	}

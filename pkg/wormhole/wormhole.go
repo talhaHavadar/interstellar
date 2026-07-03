@@ -245,6 +245,13 @@ type ActiveLink struct {
 	Descriptor any
 	// Close tears the link down. May be nil if there is nothing to release.
 	Close func() error
+	// Died, when non-nil and closed, tells the core the link's underlying
+	// resource is gone and the link must be torn down. Use it when the
+	// providing wormhole detects failure that Close would not: a
+	// reservation about to expire, an SSH connection that has become
+	// unreachable, a tunnel that has dropped. The next Acquire will build
+	// a fresh link instead of reusing the stale one.
+	Died <-chan struct{}
 }
 
 // Link is a live connection handle received from the core, satisfying one
