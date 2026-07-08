@@ -4,7 +4,7 @@ author: "Talha Can Havadar"
 date: "2026-07-08"
 tags: [ai, packaging, mcp, tooling]
 published_on:
-  - TBD
+  - https://discourse.ubuntu.com/t/reviewing-debian-packages-with-an-ai-agent-through-a-controlled-gateway-interstellar-a-debian-packager-wormhole/84961
 ---
 
 Hi all,
