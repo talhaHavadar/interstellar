@@ -354,6 +354,19 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 			return finish(nil, fmt.Errorf("re-encoding arguments: %w", err))
 		}
 
+		// Call-time semantic policy. Runs on the target-stripped payload the
+		// wormhole will actually receive, after CheckTool already allowed the
+		// call — it can only narrow (deny), never re-grant. No-op unless a
+		// policy.engine is configured and a check's tool globs match.
+		if dec, v := pol.CheckCall(ctx, w.Manifest.Name, t.Name, forwardArgs); !dec.Allow {
+			record.Decision = "deny"
+			record.Reason = dec.Reason
+			record.Semantic = toAuditVerdict(v)
+			return finish(toolError(dec.Reason), nil)
+		} else if v != nil {
+			record.Semantic = toAuditVerdict(v)
+		}
+
 		stream, err := w.Client.CallTool(ctx, &wormholev1.CallToolRequest{
 			CallId:        callID,
 			Tool:          t.Name,
@@ -412,6 +425,21 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 
 func toolError(msg string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}
+}
+
+// toAuditVerdict translates a policy semantic verdict into its audit record
+// form, keeping the audit package free of a dependency on policy.
+func toAuditVerdict(v *policy.SemanticVerdict) *audit.SemanticVerdict {
+	if v == nil {
+		return nil
+	}
+	return &audit.SemanticVerdict{
+		Rule:        v.Rule,
+		Probability: v.Probability,
+		Threshold:   v.Threshold,
+		Model:       v.Model,
+		Err:         v.Err,
+	}
 }
 
 func contains(s []string, v string) bool {

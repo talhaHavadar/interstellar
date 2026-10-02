@@ -19,6 +19,7 @@ import (
 
 	"github.com/talhaHavadar/interstellar/internal/audit"
 	"github.com/talhaHavadar/interstellar/internal/config"
+	"github.com/talhaHavadar/interstellar/internal/jev"
 	"github.com/talhaHavadar/interstellar/internal/mcpserver"
 	"github.com/talhaHavadar/interstellar/internal/policy"
 	"github.com/talhaHavadar/interstellar/internal/registry"
@@ -87,7 +88,16 @@ func run() error {
 		wormholeDirList = []string{cfg.WormholeDir}
 	}
 
-	pol, err := policy.New(cfg.Policy)
+	var policyOpts []policy.Option
+	if ec := cfg.Policy.Engine; ec != nil {
+		engine, err := buildSemanticEngine(ec)
+		if err != nil {
+			return err
+		}
+		policyOpts = append(policyOpts, policy.WithSemanticEngine(engine))
+	}
+
+	pol, err := policy.New(cfg.Policy, policyOpts...)
 	if err != nil {
 		return err
 	}
@@ -158,6 +168,28 @@ func run() error {
 
 // buildTargets converts the config's targets into session targets, marshaling
 // each opaque config block to JSON for delivery to the wormhole.
+// buildSemanticEngine constructs the external policy engine from the
+// policy.engine config block. The API key is resolved from the environment
+// (api_key_env, preferred) or inline (api_key); an empty result is fatal so a
+// misconfigured engine fails loudly at startup rather than denying every call.
+func buildSemanticEngine(ec *policy.EngineConfig) (policy.SemanticEngine, error) {
+	switch ec.Type {
+	case "", "jev":
+	default:
+		return nil, fmt.Errorf("policy.engine.type %q is not supported (valid: jev)", ec.Type)
+	}
+
+	apiKey := ec.APIKey
+	if ec.APIKeyEnv != "" {
+		apiKey = os.Getenv(ec.APIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("policy.engine: no API key (set api_key_env to a non-empty variable, or api_key)")
+	}
+
+	return jev.New(ec.BaseURL, apiKey, ec.Model, ec.Timeout), nil
+}
+
 func buildTargets(cfg *config.Config) (map[string]session.Target, error) {
 	targets := make(map[string]session.Target, len(cfg.Targets))
 	for name, t := range cfg.Targets {

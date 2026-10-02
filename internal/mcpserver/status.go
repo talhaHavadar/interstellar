@@ -27,6 +27,9 @@ type toolStatus struct {
 	// Exposed is false when the tool is hidden from agents.
 	Exposed bool   `json:"exposed"`
 	Reason  string `json:"reason,omitempty"`
+	// SemanticChecks lists the deny rules evaluated against this tool's calls
+	// at call time (global + per-wormhole). Omitted when none apply.
+	SemanticChecks []string `json:"semantic_checks,omitempty"`
 }
 
 type portStatus struct {
@@ -61,6 +64,7 @@ func buildStatus(version string, reg *registry.Registry, pol *policy.Engine, ses
 			} else if _, reason := portArgsFor(w, t, byType); reason != "" {
 				ts.Exposed, ts.Reason = false, reason
 			}
+			ts.SemanticChecks = pol.SemanticChecksFor(w.Manifest.Name, t.Name)
 			ws.Tools = append(ws.Tools, ts)
 		}
 		for _, p := range w.Manifest.Provides {

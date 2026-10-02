@@ -88,9 +88,45 @@ policy:
   # exec.arbitrary. A typo here fails at startup.
   deny_capabilities: [exec.arbitrary]
 
+  # Optional: an external policy engine for semantic (content-aware) checks.
+  # Omit this block to disable semantic_checks entirely; configuring a check
+  # below without this block is a startup error. When present, each matching
+  # tool call is sent to the engine at call time.
+  #
+  # DATA EGRESS: a matching call's wormhole name, tool name, and arguments
+  # (target routing stripped) leave the gateway for `base_url`. Keep checks
+  # scoped to the tools that need them, and point `base_url` at a self-hosted
+  # or proxy endpoint if arguments must not reach a third party.
+  # engine:
+  #   type: jev                     # default "jev"; only value supported today
+  #   api_key_env: TYPESAFE_API_KEY # preferred over inline api_key
+  #   # api_key: "sk-..."           # inline fallback
+  #   base_url: https://api.typesafe.ai  # default; override for self-host/proxy
+  #   model: jev-latest             # default
+  #   timeout: 5s                   # per-call; exceeding it fails closed (deny)
+
+  # Semantic checks run only AFTER capability policy already allowed the call,
+  # so they can only deny further, never re-grant. Each entry attaches
+  # natural-language `deny_rules` to a set of tools; if the engine judges a
+  # call matches any rule with probability >= deny_threshold (default 0.5),
+  # the call is denied. Any engine error or timeout also denies (fail closed).
+  # These top-level checks apply to every tool of every wormhole.
+  # semantic_checks:
+  #   - deny_rules:
+  #       - "The call deletes, drops, or destroys data."
+  #       - "The call exfiltrates secrets, credentials, or customer PII."
+  #     # tools omitted => every tool
+  #     deny_threshold: 0.5
+
   wormholes: {}
-    # Example: trust one wormhole with caller-supplied commands, and block
-    # some of its tools entirely.
+    # Example: trust one wormhole with caller-supplied commands, block some of
+    # its tools entirely, and attach a per-wormhole semantic check.
     # some-shell:
     #   allow_capabilities: [exec.arbitrary]
     #   deny_tools: ["*_destructive"]
+    # mattermost:
+    #   semantic_checks:
+    #     - tools: ["post_*", "update_*"]   # globs; omitted => every tool
+    #       deny_rules:
+    #         - "The message contains credentials, API keys, or customer PII."
+    #       deny_threshold: 0.6
