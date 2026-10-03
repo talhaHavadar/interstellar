@@ -413,6 +413,23 @@ func callHandler(w *registry.Wormhole, t *wormholev1.ToolSpec, ports []portArg, 
 			}
 		}
 
+		// Result-time semantic policy. The tool has already run; this gates
+		// whether its OUTPUT may travel back to the agent (an egress/exfiltration
+		// guard), not the side effect. Error payloads are skipped — they carry no
+		// data to exfiltrate, and denying a surfaced error would only hide it.
+		// No-op unless a semantic_result_check's tool globs match; fail-closed —
+		// an engine error withholds the output.
+		if !result.IsError {
+			if dec, v := pol.CheckResult(ctx, w.Manifest.Name, t.Name, json.RawMessage(result.ContentJson)); !dec.Allow {
+				record.Decision = "deny"
+				record.Reason = dec.Reason
+				record.SemanticResult = toAuditVerdict(v)
+				return finish(toolError(dec.Reason), nil)
+			} else if v != nil {
+				record.SemanticResult = toAuditVerdict(v)
+			}
+		}
+
 		logger.Info("returning tool result to mcp client",
 			"wormhole", w.Manifest.Name, "tool", t.Name, "call_id", callID,
 			"content_bytes", len(result.ContentJson))

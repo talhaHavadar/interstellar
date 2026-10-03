@@ -39,6 +39,10 @@ type Config struct {
 	// SemanticChecks are global checks applied to every tool of every wormhole,
 	// on top of any per-wormhole checks.
 	SemanticChecks []SemanticCheck `yaml:"semantic_checks"`
+	// SemanticResultChecks are the result-time counterpart of SemanticChecks:
+	// global checks run against each tool's OUTPUT before it is returned to the
+	// agent, on top of any per-wormhole result checks.
+	SemanticResultChecks []SemanticCheck `yaml:"semantic_result_checks"`
 }
 
 // EngineConfig is the connection to the external semantic policy engine.
@@ -69,11 +73,16 @@ type WormholeRules struct {
 	DenyTools []string `yaml:"deny_tools"`
 	// SemanticChecks are checks applied only to this wormhole's tools.
 	SemanticChecks []SemanticCheck `yaml:"semantic_checks"`
+	// SemanticResultChecks are result-time checks applied only to this
+	// wormhole's tool outputs.
+	SemanticResultChecks []SemanticCheck `yaml:"semantic_result_checks"`
 }
 
 // SemanticCheck attaches natural-language deny conditions to a set of tools.
-// At call time the gateway asks the engine whether the call matches any of
-// DenyRules; a probability at or above the threshold denies the call.
+// The gateway asks the engine whether any of DenyRules matches; a probability
+// at or above the threshold denies. The same shape drives both call-time
+// checks (judging the arguments) and result-time checks (judging the output) —
+// which one is decided by the config list the check lives in.
 type SemanticCheck struct {
 	// Tools are glob patterns matched against the (unqualified) tool name.
 	// Empty means every tool ("*").
@@ -94,11 +103,14 @@ type SemanticEngine interface {
 	Evaluate(ctx context.Context, call CallDescription, rules []string) ([]Verdict, error)
 }
 
-// CallDescription is the tool call handed to the semantic engine.
+// CallDescription is the tool call handed to the semantic engine. For a
+// call-time check Args is set and Result is nil; for a result-time check
+// Result carries the tool's output and Args is left empty.
 type CallDescription struct {
 	Wormhole string
 	Tool     string
 	Args     json.RawMessage
+	Result   json.RawMessage
 }
 
 // Verdict is the engine's judgment for one rule.
@@ -130,16 +142,18 @@ type Decision struct {
 
 // Engine evaluates tool calls against the configured policy.
 type Engine struct {
-	denied       map[wormhole.Capability]bool
-	rules        map[string]compiledRules
-	globalChecks []compiledCheck
-	semantic     SemanticEngine
+	denied             map[wormhole.Capability]bool
+	rules              map[string]compiledRules
+	globalChecks       []compiledCheck
+	globalResultChecks []compiledCheck
+	semantic           SemanticEngine
 }
 
 type compiledRules struct {
-	allowed   map[wormhole.Capability]bool
-	denyTools []string
-	checks    []compiledCheck
+	allowed      map[wormhole.Capability]bool
+	denyTools    []string
+	checks       []compiledCheck
+	resultChecks []compiledCheck
 }
 
 // compiledCheck is a SemanticCheck with its threshold resolved and tool globs
@@ -188,6 +202,13 @@ func New(cfg Config, opts ...Option) (*Engine, error) {
 	e.globalChecks = global
 	hasChecks = hasChecks || len(global) > 0
 
+	globalResult, err := compileChecks(cfg.SemanticResultChecks, "semantic_result_checks")
+	if err != nil {
+		return nil, err
+	}
+	e.globalResultChecks = globalResult
+	hasChecks = hasChecks || len(globalResult) > 0
+
 	for wname, r := range cfg.Wormholes {
 		cr := compiledRules{allowed: map[wormhole.Capability]bool{}, denyTools: r.DenyTools}
 		for _, name := range r.AllowCapabilities {
@@ -208,6 +229,13 @@ func New(cfg Config, opts ...Option) (*Engine, error) {
 		}
 		cr.checks = checks
 		hasChecks = hasChecks || len(checks) > 0
+
+		resultChecks, err := compileChecks(r.SemanticResultChecks, fmt.Sprintf("wormholes.%s.semantic_result_checks", wname))
+		if err != nil {
+			return nil, err
+		}
+		cr.resultChecks = resultChecks
+		hasChecks = hasChecks || len(resultChecks) > 0
 		e.rules[wname] = cr
 	}
 
@@ -278,16 +306,37 @@ func (e *Engine) CheckTool(wormholeName string, t *wormholev1.ToolSpec) Decision
 }
 
 // CheckCall applies call-time semantic checks to an already-capability-allowed
-// tool call. It gathers the global and per-wormhole checks whose tool globs
-// match toolName, asks the semantic engine whether the call matches any of
-// their deny rules, and denies if any probability meets its check's threshold.
+// tool call: it judges the wormhole/tool/arguments against the matching
+// semantic_checks and denies a match before the tool runs. See evalChecks for
+// the decision rules.
+func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, args json.RawMessage) (Decision, *SemanticVerdict) {
+	return e.evalChecks(ctx, toolName,
+		[][]compiledCheck{e.globalChecks, e.rules[wormholeName].checks},
+		CallDescription{Wormhole: wormholeName, Tool: toolName, Args: args})
+}
+
+// CheckResult applies result-time semantic checks to a tool's output before it
+// is returned to the agent: it judges the wormhole/tool/output against the
+// matching semantic_result_checks and denies a match, withholding the output.
+// Unlike CheckCall the tool has ALREADY run, so this gates egress of the output
+// to the agent, not the side effect. See evalChecks for the decision rules.
+func (e *Engine) CheckResult(ctx context.Context, wormholeName, toolName string, result json.RawMessage) (Decision, *SemanticVerdict) {
+	return e.evalChecks(ctx, toolName,
+		[][]compiledCheck{e.globalResultChecks, e.rules[wormholeName].resultChecks},
+		CallDescription{Wormhole: wormholeName, Tool: toolName, Result: result})
+}
+
+// evalChecks is the shared core of CheckCall and CheckResult. It gathers the
+// deny rules from every check group whose tool globs match toolName, asks the
+// semantic engine (with desc as the state) whether any rule matches, and
+// denies on the first verdict at or above its threshold.
 //
 // It only ever narrows: with no engine, no matching checks, or an all-clear
 // verdict it allows. A nil error from the engine is required to allow — any
 // engine error or malformed result fails closed (deny). The returned
 // *SemanticVerdict (nil when no check ran) is for the audit log: the deciding
 // rule on a deny, or the highest-scoring rule on an allow.
-func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, args json.RawMessage) (Decision, *SemanticVerdict) {
+func (e *Engine) evalChecks(ctx context.Context, toolName string, groups [][]compiledCheck, desc CallDescription) (Decision, *SemanticVerdict) {
 	if e.semantic == nil {
 		return Decision{Allow: true}, nil
 	}
@@ -297,7 +346,7 @@ func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, a
 		threshold float64
 	}
 	var refs []ruleRef
-	collect := func(checks []compiledCheck) {
+	for _, checks := range groups {
 		for _, c := range checks {
 			if !matchAny(c.tools, toolName) {
 				continue
@@ -307,8 +356,6 @@ func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, a
 			}
 		}
 	}
-	collect(e.globalChecks)
-	collect(e.rules[wormholeName].checks)
 	if len(refs) == 0 {
 		return Decision{Allow: true}, nil
 	}
@@ -318,7 +365,7 @@ func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, a
 		rules[i] = r.rule
 	}
 
-	verdicts, err := e.semantic.Evaluate(ctx, CallDescription{Wormhole: wormholeName, Tool: toolName, Args: args}, rules)
+	verdicts, err := e.semantic.Evaluate(ctx, desc, rules)
 	if err != nil {
 		reason := fmt.Sprintf("denied: semantic policy engine error: %v", err)
 		return Decision{Reason: reason}, &SemanticVerdict{Err: err.Error()}
@@ -342,20 +389,28 @@ func (e *Engine) CheckCall(ctx context.Context, wormholeName, toolName string, a
 	return Decision{Allow: true}, best
 }
 
-// SemanticChecksFor returns the deny rules (global + per-wormhole) whose tool
-// globs match toolName, for display in interstellar__status.
+// SemanticChecksFor returns the call-time deny rules (global + per-wormhole)
+// whose tool globs match toolName, for display in interstellar__status.
 func (e *Engine) SemanticChecksFor(wormholeName, toolName string) []string {
+	return rulesFor([][]compiledCheck{e.globalChecks, e.rules[wormholeName].checks}, toolName)
+}
+
+// SemanticResultChecksFor returns the result-time deny rules (global +
+// per-wormhole) whose tool globs match toolName, for interstellar__status.
+func (e *Engine) SemanticResultChecksFor(wormholeName, toolName string) []string {
+	return rulesFor([][]compiledCheck{e.globalResultChecks, e.rules[wormholeName].resultChecks}, toolName)
+}
+
+// rulesFor flattens the deny rules of every check whose tool globs match.
+func rulesFor(groups [][]compiledCheck, toolName string) []string {
 	var rules []string
-	collect := func(checks []compiledCheck) {
+	for _, checks := range groups {
 		for _, c := range checks {
-			if !matchAny(c.tools, toolName) {
-				continue
+			if matchAny(c.tools, toolName) {
+				rules = append(rules, c.denyRules...)
 			}
-			rules = append(rules, c.denyRules...)
 		}
 	}
-	collect(e.globalChecks)
-	collect(e.rules[wormholeName].checks)
 	return rules
 }
 

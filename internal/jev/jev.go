@@ -4,6 +4,11 @@
 // violation probability. The whole batch of rules for one call travels in a
 // single request, so a semantically-checked tool call costs one round-trip.
 //
+// The same path serves result-time checks: when the CallDescription carries a
+// Result, it is added to the state as "output" and the question is reworded to
+// judge the output, so one engine can gate both a call's arguments and its
+// returned output.
+//
 // Every failure path — non-200, transport/timeout, or a malformed answer —
 // returns an error rather than a probability, so the caller (policy.CheckCall)
 // fails closed and denies.
@@ -91,13 +96,40 @@ func (c *Client) Evaluate(ctx context.Context, call policy.CallDescription, rule
 	if len(args) == 0 {
 		args = json.RawMessage("null")
 	}
-	state, err := json.Marshal(map[string]any{
+	stateMap := map[string]any{
 		"wormhole":  call.Wormhole,
 		"tool":      call.Tool,
 		"arguments": args,
-	})
+	}
+	// A result-time check carries the tool's output; add it to the state so the
+	// question can judge the output rather than the arguments. ContentJson is
+	// normally JSON, but guard against a plain-text payload: an invalid
+	// fragment here would make the whole request body un-marshalable, which
+	// fails closed and would wrongly deny every result.
+	resultCheck := len(call.Result) > 0
+	if resultCheck {
+		out := call.Result
+		if !json.Valid(out) {
+			quoted, mErr := json.Marshal(string(out))
+			if mErr != nil {
+				return nil, fmt.Errorf("marshaling result: %w", mErr)
+			}
+			out = quoted
+		}
+		stateMap["output"] = out
+	}
+	state, err := json.Marshal(stateMap)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling state: %w", err)
+	}
+
+	instructions := "The state describes a tool call (its wormhole, tool name, and " +
+		"arguments). Answer yes if the tool call matches the following condition, " +
+		"otherwise no. Condition: "
+	if resultCheck {
+		instructions = "The state describes a tool call (its wormhole, tool name, and " +
+			"arguments) and the output it returned. Answer yes if the output (or the " +
+			"call) matches the following condition, otherwise no. Condition: "
 	}
 
 	ids := make([]string, len(rules))
@@ -106,10 +138,8 @@ func (c *Client) Evaluate(ctx context.Context, call policy.CallDescription, rule
 		id := fmt.Sprintf("q%d", i)
 		ids[i] = id
 		questions[id] = question{
-			Type: "noul",
-			Instructions: "The state describes a tool call (its wormhole, tool name, and " +
-				"arguments). Answer yes if the tool call matches the following condition, " +
-				"otherwise no. Condition: " + rule,
+			Type:         "noul",
+			Instructions: instructions + rule,
 		}
 	}
 

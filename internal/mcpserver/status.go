@@ -30,6 +30,9 @@ type toolStatus struct {
 	// SemanticChecks lists the deny rules evaluated against this tool's calls
 	// at call time (global + per-wormhole). Omitted when none apply.
 	SemanticChecks []string `json:"semantic_checks,omitempty"`
+	// SemanticResultChecks lists the deny rules evaluated against this tool's
+	// output before it is returned (global + per-wormhole). Omitted when none.
+	SemanticResultChecks []string `json:"semantic_result_checks,omitempty"`
 }
 
 type portStatus struct {
@@ -65,6 +68,7 @@ func buildStatus(version string, reg *registry.Registry, pol *policy.Engine, ses
 				ts.Exposed, ts.Reason = false, reason
 			}
 			ts.SemanticChecks = pol.SemanticChecksFor(w.Manifest.Name, t.Name)
+			ts.SemanticResultChecks = pol.SemanticResultChecksFor(w.Manifest.Name, t.Name)
 			ws.Tools = append(ws.Tools, ts)
 		}
 		for _, p := range w.Manifest.Provides {

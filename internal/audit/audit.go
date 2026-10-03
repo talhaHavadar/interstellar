@@ -23,13 +23,17 @@ type Record struct {
 	// Targets maps each linked port to the target the call was routed
 	// through, capturing the full resolved chain for the record.
 	Targets map[string]string `json:"targets,omitempty"`
-	// Semantic records the semantic policy-engine verdict when a semantic
-	// check ran for this call (on both allow and deny); nil otherwise, so
-	// records stay unchanged when the feature is off.
+	// Semantic records the call-time semantic policy-engine verdict when a
+	// semantic check ran for this call (on both allow and deny); nil otherwise,
+	// so records stay unchanged when the feature is off.
 	Semantic *SemanticVerdict `json:"semantic,omitempty"`
-	IsError  bool             `json:"is_error,omitempty"`
-	Error    string           `json:"error,omitempty"`
-	Duration time.Duration    `json:"duration_ns,omitempty"`
+	// SemanticResult records the result-time verdict when a semantic result
+	// check ran on the tool's output; kept separate from Semantic so a call
+	// verdict and an output verdict stay distinguishable in the log.
+	SemanticResult *SemanticVerdict `json:"semantic_result,omitempty"`
+	IsError        bool             `json:"is_error,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	Duration       time.Duration    `json:"duration_ns,omitempty"`
 }
 
 // SemanticVerdict is the audited result of a semantic policy check. On a

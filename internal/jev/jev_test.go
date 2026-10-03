@@ -63,6 +63,61 @@ func TestEvaluateHappyPath(t *testing.T) {
 	}
 }
 
+func TestEvaluateResultCheckSendsOutput(t *testing.T) {
+	var gotReq request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotReq)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "m",
+			"answers": map[string]any{"q0": map[string]any{"type": "noul", "noul": 0.2}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "k", "", time.Second)
+	_, err := c.Evaluate(context.Background(),
+		policy.CallDescription{Wormhole: "vault", Tool: "read", Result: json.RawMessage(`{"token":"abc"}`)},
+		[]string{"output has a token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gotReq.State), `"output"`) || !strings.Contains(string(gotReq.State), `"token":"abc"`) {
+		t.Errorf("state should carry the output, got %s", gotReq.State)
+	}
+	for _, q := range gotReq.Questions {
+		if !strings.Contains(q.Instructions, "output") {
+			t.Errorf("result-check instructions should mention the output, got %q", q.Instructions)
+		}
+	}
+}
+
+func TestEvaluateResultCheckWrapsNonJSON(t *testing.T) {
+	var gotReq request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &gotReq); err != nil {
+			t.Errorf("request body must stay valid JSON even for a plain-text result: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "m",
+			"answers": map[string]any{"q0": map[string]any{"type": "noul", "noul": 0.1}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "k", "", time.Second)
+	_, err := c.Evaluate(context.Background(),
+		policy.CallDescription{Tool: "t", Result: json.RawMessage(`not json`)},
+		[]string{"r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gotReq.State), `"output"`) {
+		t.Errorf("non-JSON output should still appear in state, got %s", gotReq.State)
+	}
+}
+
 func TestEvaluateFailsClosedNon200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

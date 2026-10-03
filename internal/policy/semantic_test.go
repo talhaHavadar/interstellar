@@ -198,3 +198,120 @@ func TestSemanticChecksForMergesGlobalAndWormhole(t *testing.T) {
 		t.Error("non-matching tool should still get the global rule")
 	}
 }
+
+// ── result-time checks (CheckResult) ──────────────────────────────────────
+
+func TestCheckResultGlobalDeny(t *testing.T) {
+	fe := &fakeEngine{probs: map[string]float64{"output leaks secrets": 0.9}}
+	e, err := New(Config{
+		SemanticResultChecks: []SemanticCheck{{DenyRules: []string{"output leaks secrets"}, DenyThreshold: f64(0.5)}},
+	}, WithSemanticEngine(fe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, v := e.CheckResult(context.Background(), "any", "read", json.RawMessage(`{"secret":"x"}`))
+	if dec.Allow {
+		t.Fatal("prob >= threshold must deny")
+	}
+	if v == nil || v.Rule != "output leaks secrets" {
+		t.Fatalf("verdict should name the deciding rule, got %+v", v)
+	}
+	if string(fe.gotCall.Result) != `{"secret":"x"}` {
+		t.Errorf("result should reach the engine verbatim, got %s", fe.gotCall.Result)
+	}
+	if len(fe.gotCall.Args) != 0 {
+		t.Errorf("a result check should not send call args, got %s", fe.gotCall.Args)
+	}
+}
+
+func TestResultAndCallChecksAreIndependent(t *testing.T) {
+	fe := &fakeEngine{probs: map[string]float64{"call-rule": 0.9, "result-rule": 0.9}}
+	e, err := New(Config{
+		SemanticChecks:       []SemanticCheck{{DenyRules: []string{"call-rule"}}},
+		SemanticResultChecks: []SemanticCheck{{DenyRules: []string{"result-rule"}}},
+	}, WithSemanticEngine(fe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec, _ := e.CheckCall(context.Background(), "w", "t", nil); dec.Allow {
+		t.Fatal("call check should fire")
+	}
+	if len(fe.gotRules) != 1 || fe.gotRules[0] != "call-rule" {
+		t.Errorf("CheckCall should evaluate only call rules, got %v", fe.gotRules)
+	}
+	if dec, _ := e.CheckResult(context.Background(), "w", "t", json.RawMessage(`{}`)); dec.Allow {
+		t.Fatal("result check should fire")
+	}
+	if len(fe.gotRules) != 1 || fe.gotRules[0] != "result-rule" {
+		t.Errorf("CheckResult should evaluate only result rules, got %v", fe.gotRules)
+	}
+}
+
+func TestCheckResultScoping(t *testing.T) {
+	fe := &fakeEngine{probs: map[string]float64{"r": 0.9}}
+	e, err := New(Config{
+		Wormholes: map[string]WormholeRules{
+			"vault": {SemanticResultChecks: []SemanticCheck{{Tools: []string{"read_*"}, DenyRules: []string{"r"}}}},
+		},
+	}, WithSemanticEngine(fe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec, _ := e.CheckResult(context.Background(), "vault", "read_secret", json.RawMessage(`{}`)); dec.Allow {
+		t.Error("matching wormhole+tool result check should fire")
+	}
+	if dec, v := e.CheckResult(context.Background(), "vault", "list_keys", json.RawMessage(`{}`)); !dec.Allow || v != nil {
+		t.Error("non-matching tool glob should have no result check")
+	}
+	if dec, _ := e.CheckResult(context.Background(), "other", "read_secret", json.RawMessage(`{}`)); !dec.Allow {
+		t.Error("per-wormhole result check must not leak to another wormhole")
+	}
+}
+
+func TestSemanticResultChecksWithoutEngineFails(t *testing.T) {
+	_, err := New(Config{SemanticResultChecks: []SemanticCheck{{DenyRules: []string{"r"}}}})
+	if err == nil {
+		t.Fatal("semantic_result_checks without an engine must fail at startup")
+	}
+	if !strings.Contains(err.Error(), "policy.engine") {
+		t.Errorf("error should point at policy.engine, got %q", err)
+	}
+}
+
+func TestCheckResultFailsClosedOnError(t *testing.T) {
+	fe := &fakeEngine{err: errors.New("boom")}
+	e, err := New(Config{SemanticResultChecks: []SemanticCheck{{DenyRules: []string{"r"}}}}, WithSemanticEngine(fe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, v := e.CheckResult(context.Background(), "w", "t", json.RawMessage(`{}`))
+	if dec.Allow {
+		t.Fatal("engine error must fail closed")
+	}
+	if v == nil || v.Err == "" {
+		t.Errorf("verdict should record the engine error, got %+v", v)
+	}
+}
+
+func TestSemanticResultChecksForMergesGlobalAndWormhole(t *testing.T) {
+	fe := &fakeEngine{}
+	e, err := New(Config{
+		SemanticResultChecks: []SemanticCheck{{DenyRules: []string{"global-out"}}},
+		Wormholes: map[string]WormholeRules{
+			"vault": {SemanticResultChecks: []SemanticCheck{{Tools: []string{"read_*"}, DenyRules: []string{"wh-out"}}}},
+		},
+	}, WithSemanticEngine(fe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.SemanticResultChecksFor("vault", "read_secret"); len(got) != 2 {
+		t.Fatalf("want global + per-wormhole result rules, got %v", got)
+	}
+	if e.SemanticResultChecksFor("vault", "other")[0] != "global-out" {
+		t.Error("non-matching tool should still get the global result rule")
+	}
+	// Result rules must not surface under the call-check accessor.
+	if got := e.SemanticChecksFor("vault", "read_secret"); len(got) != 0 {
+		t.Errorf("call-check accessor should not return result rules, got %v", got)
+	}
+}

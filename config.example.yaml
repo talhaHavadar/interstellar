@@ -118,9 +118,23 @@ policy:
   #     # tools omitted => every tool
   #     deny_threshold: 0.5
 
+  # Result checks are the symmetric counterpart: they judge a tool's OUTPUT
+  # before it is returned to the agent, gating what the agent is allowed to
+  # SEE. Same shape as semantic_checks (tools globs, deny_rules, deny_threshold)
+  # and the same fail-closed posture. NOTE: the tool has ALREADY run by the time
+  # its output is judged — a deny withholds the output from the agent, it does
+  # not undo the call's side effects. Error results are not checked. DATA
+  # EGRESS: a matching tool's output (not just its arguments) leaves the gateway
+  # for the engine's base_url, so scope these to the tools that need them.
+  # semantic_result_checks:
+  #   - deny_rules:
+  #       - "The output contains credentials, API keys, or private keys."
+  #       - "The output contains customer PII."
+  #     deny_threshold: 0.5
+
   wormholes: {}
     # Example: trust one wormhole with caller-supplied commands, block some of
-    # its tools entirely, and attach a per-wormhole semantic check.
+    # its tools entirely, and attach per-wormhole semantic checks.
     # some-shell:
     #   allow_capabilities: [exec.arbitrary]
     #   deny_tools: ["*_destructive"]
@@ -129,4 +143,9 @@ policy:
     #     - tools: ["post_*", "update_*"]   # globs; omitted => every tool
     #       deny_rules:
     #         - "The message contains credentials, API keys, or customer PII."
+    #       deny_threshold: 0.6
+    #   semantic_result_checks:
+    #     - tools: ["read_*", "search_*"]   # gate what a read can hand back
+    #       deny_rules:
+    #         - "The output contains credentials, API keys, or customer PII."
     #       deny_threshold: 0.6
