@@ -2,6 +2,9 @@ GOBIN := $(shell go env GOPATH)/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
+# If buf is not installed, run it (and the protoc plugins) from nixpkgs.
+NIX_BUF := $(if $(shell PATH="$$PATH:$(GOBIN)" command -v buf 2>/dev/null),,nix shell nixpkgs#buf nixpkgs#protoc-gen-go nixpkgs#protoc-gen-go-grpc -c)
+
 .PHONY: all build wormholes run test gen gen-check lint clean
 
 all: build wormholes
@@ -32,18 +35,18 @@ test:
 # Regenerate gRPC code from proto/. Requires buf, protoc-gen-go and
 # protoc-gen-go-grpc (go install github.com/bufbuild/buf/cmd/buf@latest ...).
 gen:
-	PATH="$(PATH):$(GOBIN)" buf lint
-	PATH="$(PATH):$(GOBIN)" buf generate
+	PATH="$(PATH):$(GOBIN)" $(NIX_BUF) buf lint
+	PATH="$(PATH):$(GOBIN)" $(NIX_BUF) buf generate
 
 lint: gen-check
 	go vet ./...
-	PATH="$(PATH):$(GOBIN)" buf lint
+	PATH="$(PATH):$(GOBIN)" $(NIX_BUF) buf lint
 
 # Fail if the committed generated code is out of sync with proto/ (someone
 # edited a .proto without running `make gen`, or added a proto without
 # committing its generated output). Regenerates in place, then checks the tree.
 gen-check:
-	PATH="$(PATH):$(GOBIN)" buf generate
+	PATH="$(PATH):$(GOBIN)" $(NIX_BUF) buf generate
 	@if [ -n "$$(git status --porcelain -- gen/)" ]; then \
 		echo "ERROR: generated code is out of date or uncommitted."; \
 		echo "Run 'make gen' and commit the changes under gen/:"; \
